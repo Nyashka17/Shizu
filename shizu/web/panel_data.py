@@ -7,7 +7,7 @@ import re
 from collections.abc import Mapping
 from datetime import datetime
 
-from shizu import loader, utils
+from shizu import loader, security, utils, version
 from shizu.backups import EncryptedBackup
 from shizu.redaction import SecretRedactor
 
@@ -27,11 +27,16 @@ class PanelData:
 
     def state(self):
         me = self.module.me
+        backuper = next(
+            (m for m in self.manager.modules if m.name == "ShizuBackuper"), None
+        )
+        backup_config = getattr(backuper, "config", {})
         return {
             "account": {
                 "id": me.id,
                 "name": " ".join(filter(None, [me.first_name, me.last_name])),
                 "username": me.username or "",
+                "has_avatar": bool(getattr(me, "photo", None)),
             },
             "settings": {
                 "prefixes": self.db.get("shizu.loader", "prefixes", ["."]),
@@ -40,9 +45,16 @@ class PanelData:
                 "bot": self.db.get("shizu.bot", "username", ""),
             },
             "modules": [self.module_info(module) for module in self.manager.modules],
+            "runtime": {
+                "version": ".".join(map(str, version.__version__)),
+                "uptime": utils.uptime(),
+            },
             "backups": {
                 "key_path": str(self.backups.key_path),
                 "max_bytes": self.backups.MAX_BYTES,
+                "available": backuper is not None,
+                "auto_backup": bool(backup_config.get("auto_backup", False)),
+                "backup_time": str(backup_config.get("backup_time", "03:00")),
             },
         }
 
@@ -55,6 +67,80 @@ class PanelData:
             "config_count": len(config),
             "commands": len(getattr(module, "command_handlers", {})),
             "description": SecretRedactor.text(module.__doc__ or ""),
+        }
+
+    def permissions(self):
+        """Configured grants, including dormant owners and unloaded commands."""
+        owner_id = str(self.module.me.id)
+        owner_mode = bool(self.db.get("shizu.owner", "status", False))
+        owners = {str(uid) for uid in self.db.get("shizu.me", "owners", [])}
+        direct = {
+            str(uid): commands
+            for uid, commands in self.db.get("shizu.permissions", "users", {}).items()
+        }
+        assignments = {
+            str(uid): groups
+            for uid, groups in self.db.get(
+                "shizu.commandgroups", "user_groups", {}
+            ).items()
+        }
+        groups = self.db.get("shizu.commandgroups", "groups", {})
+        handlers = getattr(self.manager, "command_handlers", {})
+
+        def names(values):
+            if not isinstance(values, (list, tuple, set)):
+                return []
+            return sorted({name for name in values if isinstance(name, str)})
+
+        def command_info(name, user_id=None):
+            handler = handlers.get(name)
+            mask = security.mask_of(handler) if handler else 0
+            is_owner = user_id == owner_id or (owner_mode and user_id in owners)
+            grant_applies = handler is not None and (
+                user_id == owner_id
+                or not mask
+                or bool(mask & (security.SUDO | security.SUPPORT | security.EVERYONE))
+                or (is_owner and bool(mask & security.OWNER))
+            )
+            return {
+                "name": SecretRedactor.text(name),
+                "module": str(getattr(getattr(handler, "__self__", None), "name", "")),
+                "available": handler is not None,
+                "grant_applies": grant_applies,
+            }
+
+        users = []
+        for uid in sorted({owner_id, *owners, *direct, *assignments}, key=str):
+            assigned_groups = names(assignments.get(uid, []))
+            commands = set(names(direct.get(uid, [])))
+            for group in assigned_groups:
+                commands.update(names(groups.get(group, [])))
+            users.append(
+                {
+                    "id": uid,
+                    "account_owner": uid == owner_id,
+                    "additional_owner": uid in owners and uid != owner_id,
+                    "owner_active": uid == owner_id or (owner_mode and uid in owners),
+                    "direct": [
+                        command_info(name, uid) for name in names(direct.get(uid, []))
+                    ],
+                    "groups": [SecretRedactor.text(name) for name in assigned_groups],
+                    "commands": [command_info(name, uid) for name in sorted(commands)],
+                }
+            )
+        return {
+            "owner_mode": owner_mode,
+            "users": users,
+            "groups": [
+                {
+                    "name": SecretRedactor.text(name),
+                    "commands": [command_info(command) for command in names(commands)],
+                    "users": sorted(
+                        uid for uid, items in assignments.items() if name in items
+                    ),
+                }
+                for name, commands in sorted(groups.items())
+            ],
         }
 
     def save_settings(self, data):

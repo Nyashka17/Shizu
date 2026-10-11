@@ -19,6 +19,7 @@ from shizu.translator import Translator
 from shizu.web.core import TunnelManager
 from shizu.web.panel_auth import PanelAuth
 from shizu.web.panel_data import PanelData, PanelError
+from shizu.web.panel_system import PanelSystem
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class DashboardServer(TunnelManager):
         "/panel.js",
         "/panel.css",
         "/sakura.svg",
+        "/backup-illustration.svg",
         "/api/meta",
         "/api/auth/start",
         "/api/auth/status",
@@ -40,11 +42,14 @@ class DashboardServer(TunnelManager):
         self.module = module
         self.auth = PanelAuth(module.me.id)
         self.data = PanelData(module)
+        self.system = PanelSystem(module.db, module.app, self.data.backups.key_path)
         self.translator = Translator(module.app, module.db)
         self.runner = None
         self.local_url = None
         self._restart_task = None
         self._mutation_lock = asyncio.Lock()
+        self._avatar_cache = None
+        self._avatar_lock = asyncio.Lock()
         self.resources = Path(utils.get_base_dir()).parent / "web-resources" / "panel"
         self.app = web.Application(
             middlewares=[self.middleware], client_max_size=EncryptedBackup.MAX_BYTES
@@ -57,13 +62,18 @@ class DashboardServer(TunnelManager):
         routes.add_get("/panel.js", self.javascript)
         routes.add_get("/panel.css", self.stylesheet)
         routes.add_get("/sakura.svg", self.sakura)
+        routes.add_get("/backup-illustration.svg", self.backup_illustration)
         routes.add_get("/fonts/{name}", self.font)
         routes.add_get("/api/meta", self.meta)
         routes.add_post("/api/auth/start", self.auth_start)
         routes.add_get("/api/auth/status", self.auth_status)
         routes.add_get("/api/session", self.session)
+        routes.add_get("/api/avatar", self.avatar)
         routes.add_post("/api/logout", self.logout)
         routes.add_get("/api/state", self.state)
+        routes.add_get("/api/server/metrics", self.server_metrics)
+        routes.add_get("/api/server/diagnostics", self.server_diagnostics)
+        routes.add_get("/api/permissions", self.permissions)
         routes.add_post("/api/settings", self.settings)
         routes.add_get("/api/modules/{name}/config", self.module_config)
         routes.add_post("/api/modules/{name}/config", self.module_save)
@@ -206,6 +216,7 @@ class DashboardServer(TunnelManager):
         if self.runner:
             await self.runner.cleanup()
             self.runner = None
+        self._avatar_cache = None
         if was_running:
             await self.notify("web_closed")
 
@@ -261,7 +272,15 @@ class DashboardServer(TunnelManager):
 
     async def font(self, request):
         name = request.match_info["name"]
-        if name not in {"Movement.ttf", "Hubballi-Regular.ttf", "Roboto.ttf"}:
+        if name not in {
+            "Movement.ttf",
+            "Hubballi-Regular.ttf",
+            "Roboto.ttf",
+            "Poppins-Regular.ttf",
+            "Poppins-Medium.ttf",
+            "Poppins-SemiBold.ttf",
+            "Poppins-Bold.ttf",
+        }:
             raise web.HTTPNotFound()
         return web.Response(
             body=self.resources.joinpath("fonts", name).read_bytes(),
@@ -273,6 +292,41 @@ class DashboardServer(TunnelManager):
             body=self.resources.joinpath("sakura.svg").read_bytes(),
             content_type="image/svg+xml",
         )
+
+    async def backup_illustration(self, request):
+        return web.Response(
+            body=self.resources.joinpath("backup-illustration.svg").read_bytes(),
+            content_type="image/svg+xml",
+        )
+
+    async def avatar(self, request):
+        photo = getattr(self.module.me, "photo", None)
+        photo_id = getattr(photo, "small_file_id", None)
+        if not photo_id:
+            return web.Response(status=204)
+        async with self._avatar_lock:
+            if self._avatar_cache is None or self._avatar_cache[0] != photo_id:
+                try:
+                    media = await asyncio.wait_for(
+                        self.module.app.download_media(photo_id, in_memory=True),
+                        timeout=8,
+                    )
+                    if not hasattr(media, "read"):
+                        return web.Response(status=204)
+                    try:
+                        media.seek(0)
+                        content = media.read(1024 * 1024 + 1)
+                    finally:
+                        media.close()
+                    if len(content) > 1024 * 1024 or not content.startswith(
+                        b"\xff\xd8\xff"
+                    ):
+                        return web.Response(status=204)
+                    self._avatar_cache = (photo_id, content)
+                except Exception:
+                    logger.debug("Dashboard avatar is unavailable")
+                    return web.Response(status=204)
+            return web.Response(body=self._avatar_cache[1], content_type="image/jpeg")
 
     async def meta(self, request):
         prefix = "shizu.web.panel."
@@ -368,6 +422,15 @@ class DashboardServer(TunnelManager):
 
     async def state(self, request):
         return web.json_response(self.data.state())
+
+    async def server_metrics(self, request):
+        return web.json_response(await self.system.metrics())
+
+    async def server_diagnostics(self, request):
+        return web.json_response(await asyncio.to_thread(self.system.diagnostics))
+
+    async def permissions(self, request):
+        return web.json_response(self.data.permissions())
 
     async def settings(self, request):
         self.data.save_settings(await self._json(request))

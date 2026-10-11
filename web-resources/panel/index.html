@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="light">
   <title>Shizu</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='12' fill='%237de2b0'/%3E%3Ctext x='12' y='29' font-size='28' font-family='sans-serif' fill='%23163224'%3Es%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="/panel.css">
@@ -24,20 +24,51 @@
     </div>
   </main>
   <div id="dashboard" class="shell" hidden>
-    <main class="panel-window">
-      <header class="panel-header">
-        <div class="brand"><span class="sakura-flower" aria-hidden="true">✿</span><span>Shizu</span></div>
-      </header>
+    <aside class="sidebar">
+      <div class="sidebar-profile"><img id="account-avatar" class="account-avatar" alt="" hidden><strong id="account-name"></strong><small id="account-id"></small></div>
       <nav class="tabs" aria-label="Shizu">
-        <button class="nav active" data-view="settings" data-i18n="settings_title"></button>
+        <button class="nav active" data-view="overview" data-i18n="overview_title"></button>
         <button class="nav" data-view="modules" data-i18n="modules_title"></button>
+        <button class="nav" data-view="server" data-i18n="server_title"></button>
+        <button class="nav" data-view="permissions" data-i18n="permissions_title"></button>
         <button class="nav" data-view="logs" data-i18n="logs_title"></button>
         <button class="nav" data-view="backups" data-i18n="backups_title"></button>
+        <button class="nav" data-view="settings" data-i18n="settings_title"></button>
       </nav>
-      <div class="content">
-        <div id="demo-notice" class="demo-notice" hidden data-i18n="demo_notice"></div>
-        <section id="view-settings" class="view">
-          <form id="settings-form" class="card">
+      <div class="sidebar-footer"><button id="logout" class="text-button" data-i18n="logout"></button><p class="session-note" data-i18n="session_note"></p><div id="demo-notice" class="demo-notice" hidden data-i18n="demo_notice"></div></div>
+    </aside>
+    <main class="panel-window">
+      <div class="workspace-main">
+        <header class="page-heading"><div><h1 id="page-title"></h1><p id="page-subtitle" class="muted"></p></div><button id="header-refresh" class="round-button" type="button" data-i18n-aria-label="refresh" data-i18n-title="refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8M21 3v5h-5M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16M8 16H3v5"/></svg></button></header>
+        <div class="content">
+          <section id="view-overview" class="view">
+            <figure class="history-chart"><svg id="overview-history" viewBox="0 0 510 60" role="img" data-i18n-aria-label="chart_title"></svg><figcaption class="sr-only" data-i18n="chart_hint"></figcaption></figure>
+            <section class="recent-events"><div class="surface-heading"><h2 data-i18n="recent_events"></h2><button id="refresh-overview" class="dots-button" data-i18n-aria-label="refresh"><span aria-hidden="true">•••</span></button></div><ul id="overview-events" class="event-list" aria-live="polite"></ul><p id="overview-events-status" class="small muted" role="status"></p></section>
+            <section class="quick-section"><h2 data-i18n="quick_actions"></h2><div class="quick-actions">
+              <button class="quick-action" data-view="modules"><span class="action-symbol" aria-hidden="true">▦</span><span><strong data-i18n="manage_modules"></strong><small data-i18n="manage_modules_hint"></small></span><span aria-hidden="true">→</span></button>
+              <button id="overview-install" class="quick-action"><span class="action-symbol" aria-hidden="true">＋</span><span><strong data-i18n="add_module"></strong><small data-i18n="add_module_hint"></small></span><span aria-hidden="true">→</span></button>
+              <button id="overview-backup" class="quick-action"><span class="action-symbol" aria-hidden="true">↓</span><span><strong data-i18n="encrypted_backup"></strong><small data-i18n="quick_backup_hint"></small></span><span aria-hidden="true">→</span></button>
+              <button class="quick-action" data-view="logs"><span class="action-symbol" aria-hidden="true">≡</span><span><strong data-i18n="open_logs"></strong><small data-i18n="open_logs_hint"></small></span><span aria-hidden="true">→</span></button>
+            </div></section>
+          </section>
+        <section id="view-server" class="view" hidden>
+          <div class="section-toolbar"><p class="small muted" data-i18n="monitor_hint"></p><button id="refresh-server" class="button secondary" data-i18n="refresh"></button></div>
+          <div id="server-resources" class="resource-grid"></div><p id="server-metrics-status" class="small muted monitor-status" role="status"></p>
+          <section class="surface card"><h2 data-i18n="shizu_process"></h2><dl id="server-process" class="summary-list process-summary"></dl></section>
+          <div class="diagnostics-grid"><section class="surface"><h2 data-i18n="versions_title"></h2><dl id="server-versions" class="summary-list"></dl></section><section class="surface"><h2 data-i18n="database_status"></h2><dl id="server-database" class="summary-list"></dl></section></div>
+          <section class="surface"><h2 data-i18n="files_title"></h2><p class="small muted events-hint" data-i18n="files_hint"></p><div id="server-files" class="file-list"></div></section>
+          <p id="server-diagnostics-status" class="small muted monitor-status" role="status"></p>
+        </section>
+        <section id="view-permissions" class="view" hidden>
+          <div class="section-toolbar"><p class="small muted" data-i18n="permissions_hint"></p><button id="refresh-permissions" class="button secondary" data-i18n="refresh"></button></div>
+          <div class="surface card"><div class="surface-heading"><h2 data-i18n="owner_mode"></h2><strong id="permissions-owner-mode" class="small"></strong></div><p class="small muted events-hint" data-i18n="web_owner_only"></p><p class="small muted" data-i18n="permission_scope_hint"></p></div>
+          <div class="list-heading"><input id="permissions-search" type="search" data-i18n-placeholder="search_permissions" data-i18n-aria-label="search_permissions" autocomplete="off"></div>
+          <h2 class="list-title" data-i18n="users_access"></h2><div id="permissions-users" class="permissions-list"></div><p id="permissions-empty" class="small muted" hidden data-i18n="no_permissions"></p>
+          <h2 class="list-title" data-i18n="command_groups"></h2><div id="permissions-groups" class="permissions-list"></div><p id="permissions-groups-empty" class="small muted" hidden data-i18n="no_command_groups"></p>
+          <p id="permissions-status" class="small muted monitor-status" role="status"></p>
+        </section>
+        <section id="view-settings" class="view" hidden>
+          <form id="settings-form" class="card surface">
             <div class="field-row"><label for="prefixes"><strong data-i18n="prefixes"></strong><span data-i18n="prefixes_hint"></span></label><input id="prefixes" name="prefixes" required autocomplete="off" maxlength="160"></div>
             <div class="field-row"><label for="language"><strong data-i18n="language"></strong><span data-i18n="language_hint"></span></label><select id="language" name="language"><option value="en">English</option><option value="ru">Русский</option><option value="uz">O‘zbekcha</option></select></div>
             <div class="field-row"><label for="api-protection"><strong data-i18n="api_protection"></strong><span data-i18n="api_protection_hint"></span></label><input class="switch" id="api-protection" name="api_protection" type="checkbox"></div>
@@ -50,22 +81,27 @@
           <details class="module-install"><summary data-i18n="install_module"></summary><form id="load-form" class="card load-form"><label for="module-url" data-i18n="module_url"></label><div class="input-action"><input id="module-url" type="url" placeholder="https://…/module.py" required autocomplete="off"><button class="button primary" data-i18n="install_module"></button></div><p class="small muted" data-i18n="besafe_note"></p></form></details>
         </section>
         <section id="view-logs" class="view" hidden>
-          <div class="card log-card"><div class="card-heading log-tools"><select id="log-level" data-i18n-aria-label="log_level"><option>DEBUG</option><option selected>INFO</option><option>WARNING</option><option>ERROR</option><option>CRITICAL</option></select><div><button id="download-logs" class="button secondary" data-i18n="download"></button><button id="refresh-logs" class="button secondary" data-i18n="refresh"></button></div></div><pre id="log-output" class="log-output" tabindex="0"></pre><div class="card-footer small muted" data-i18n="logs_hint"></div></div>
+          <div class="card surface log-card"><div class="card-heading log-tools"><select id="log-level" data-i18n-aria-label="log_level"><option>DEBUG</option><option selected>INFO</option><option>WARNING</option><option>ERROR</option><option>CRITICAL</option></select><div><button id="download-logs" class="button secondary" data-i18n="download"></button><button id="refresh-logs" class="button secondary" data-i18n="refresh"></button></div></div><pre id="log-output" class="log-output" tabindex="0"></pre><div class="card-footer small muted" data-i18n="logs_hint"></div></div>
         </section>
         <section id="view-backups" class="view" hidden>
-          <div class="backup-grid"><div class="card backup-download"><h2 data-i18n="encrypted_backup"></h2><p class="muted" data-i18n="encrypted_backup_hint"></p><button id="download-backup" class="button primary" data-i18n="create_backup"></button></div><div class="card key-card"><h2 data-i18n="recovery_key"></h2><p class="muted" data-i18n="recovery_key_hint"></p><code id="key-path"></code><p class="small muted" data-i18n="key_not_included"></p></div></div>
-          <div id="backup-schedule" class="card"><div class="card-heading"><h2 data-i18n="backup_schedule"></h2><span class="small muted" data-i18n="server_time"></span></div><div class="field-row"><label for="auto-backup"><strong data-i18n="daily_backup"></strong><span data-i18n="daily_backup_hint"></span></label><input id="auto-backup" class="switch" type="checkbox"></div><form id="backup-time-form" class="field-row"><label for="backup-time"><strong data-i18n="backup_time"></strong></label><div class="input-action"><input id="backup-time" type="time" required><button class="button secondary" data-i18n="save"></button></div></form></div>
-          <form id="restore-form" class="card"><div class="card-heading"><h2 data-i18n="restore_backup"></h2></div><p class="muted" data-i18n="restore_hint"></p><label class="file-input"><span data-i18n="backup_file"></span><input id="restore-file" type="file" accept=".shizu-backup,.json,application/octet-stream,application/json" required></label><label class="check-row"><input id="restore-legacy" type="checkbox"><span data-i18n="allow_legacy"></span></label><button class="button secondary" data-i18n="inspect_backup"></button><div id="restore-preview" class="restore-preview" hidden><strong data-i18n="restore_confirm_title"></strong><p id="restore-summary"></p><p class="muted" data-i18n="restore_confirm_hint"></p><button id="confirm-restore" class="button danger" type="button" data-i18n="confirm_restore"></button></div></form>
+          <div class="backup-grid"><div class="card surface backup-download"><h2 data-i18n="encrypted_backup"></h2><p class="muted" data-i18n="encrypted_backup_hint"></p><button id="download-backup" class="button primary" data-i18n="create_backup"></button></div><div class="card surface key-card"><h2 data-i18n="recovery_key"></h2><p class="muted" data-i18n="recovery_key_hint"></p><code id="key-path"></code><p class="small muted" data-i18n="key_not_included"></p></div></div>
+          <div id="backup-schedule" class="card surface"><div class="card-heading"><h2 data-i18n="backup_schedule"></h2><span class="small muted" data-i18n="server_time"></span></div><div class="field-row"><label for="auto-backup"><strong data-i18n="daily_backup"></strong><span data-i18n="daily_backup_hint"></span></label><input id="auto-backup" class="switch" type="checkbox"></div><form id="backup-time-form" class="field-row"><label for="backup-time"><strong data-i18n="backup_time"></strong></label><div class="input-action"><input id="backup-time" type="time" required><button class="button secondary" data-i18n="save"></button></div></form></div>
+          <form id="restore-form" class="card surface"><div class="card-heading"><h2 data-i18n="restore_backup"></h2></div><p class="muted" data-i18n="restore_hint"></p><label class="file-input"><span data-i18n="backup_file"></span><input id="restore-file" type="file" accept=".shizu-backup,.json,application/octet-stream,application/json" required></label><label class="check-row"><input id="restore-legacy" type="checkbox"><span data-i18n="allow_legacy"></span></label><button class="button secondary" data-i18n="inspect_backup"></button><div id="restore-preview" class="restore-preview" hidden><strong data-i18n="restore_confirm_title"></strong><p id="restore-summary"></p><p class="muted" data-i18n="restore_confirm_hint"></p><button id="confirm-restore" class="button danger" type="button" data-i18n="confirm_restore"></button></div></form>
         </section>
+        <section id="view-config" class="view config-page" aria-labelledby="config-title" hidden>
+          <button id="back-to-modules" class="text-button back-button" type="button"><span aria-hidden="true">←</span><span data-i18n="back_to_modules"></span></button>
+          <div class="config-heading"><span class="eyebrow" data-i18n="module_configuration"></span><h1 id="config-title" tabindex="-1"></h1><p class="muted small" data-i18n="hidden_values_hint"></p></div>
+          <div id="config-fields" class="surface"></div>
+        </section>
+        </div>
       </div>
-      <footer class="panel-footer">
-        <div class="account"><strong id="account-name"></strong><small id="account-id"></small></div>
-        <button id="logout" class="text-button" data-i18n="logout"></button>
-      </footer>
-      <p class="session-note" data-i18n="session_note"></p>
+      <aside class="dashboard-aside">
+        <section class="aside-resources"><div class="surface-heading"><h2 data-i18n="server_load"></h2><button class="text-button" data-view="server" data-i18n="details"></button></div><div id="overview-resources" class="compact-resources"></div><p id="overview-metrics-status" class="small muted monitor-status" role="status"></p></section>
+        <section class="backup-tip"><img src="/backup-illustration.svg" alt="" class="backup-illustration"><h2 data-i18n="backup_tip_title"></h2><p class="muted" data-i18n="backup_tip_hint"></p><button class="button primary" data-view="backups" data-i18n="backup_options"></button></section>
+        <details class="aside-settings"><summary data-i18n="current_settings"></summary><dl class="summary-list"><div><dt data-i18n="active_prefix"></dt><dd id="overview-prefixes"></dd></div><div><dt data-i18n="language"></dt><dd id="overview-language"></dd></div><div><dt data-i18n="api_protection"></dt><dd id="overview-protection"></dd></div><div><dt data-i18n="inline_bot"></dt><dd id="overview-bot"></dd></div><div><dt data-i18n="daily_backup"></dt><dd id="overview-backup-status"></dd></div><div><dt data-i18n="backup_time"></dt><dd id="overview-backup-time"></dd></div></dl><button class="text-button" data-view="settings" data-i18n="edit"></button></details>
+      </aside>
     </main>
   </div>
-  <dialog id="config-dialog"><div class="dialog-heading"><div><span class="eyebrow" data-i18n="module_configuration"></span><h2 id="config-title"></h2></div><button id="close-config" class="icon-button" data-i18n-title="close" data-i18n-aria-label="close">×</button></div><p class="muted small" data-i18n="hidden_values_hint"></p><div id="config-fields"></div></dialog>
   <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 </body>
 </html>
