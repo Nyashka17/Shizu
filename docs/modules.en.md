@@ -559,6 +559,16 @@ await self.inline.form(
 - Rich forms use Bot API 10.3. Telegram apps that don't support rich
   messages yet may show them differently.
 
+The built-in `.info` supports rich mode too: open `.config ShizuInfo` and enable
+`rich` (defaults to `False`). The card uses the banner from `photo_url`, a heading,
+a table and a separate button block from `custom_buttons`. The default button
+style is `danger`; its dictionary can specify `style="primary"` or
+`style="success"`. Telegram clients determine the button size. `custom_message`
+replaces the heading and table with your text. The banner is uploaded once to
+the logs chat (or the owner if no logs chat is configured), the temporary message
+is deleted, and its `file_id` is cached. If Telegram rejects the rich payload,
+the card falls back to text with an ordinary link for the button.
+
 ### Lists and galleries
 
 ```python

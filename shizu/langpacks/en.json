@@ -55,6 +55,7 @@
   "shizu.modules.ShizuInfo.custom_msg": "Custom message must contain the {mention}, {version}, {prefix}, {branch} and {platform} keywords",
   "shizu.modules.ShizuInfo.custom_button": "Custom button must have text and a URL",
   "shizu.modules.ShizuInfo.photo_url": "Photo URL must be valid",
+  "shizu.modules.ShizuInfo.rich": "Send info as a rich card with a banner, table and a separate button row",
   "shizu.modules.ShizuLanguages.incorrect_language": "<emoji id=5807626765874499116>🚫</emoji> <b>Incorrect language</b>",
   "shizu.modules.ShizuLanguages.language_saved": "{} <b>Language saved</b>",
   "shizu.modules.ShizuLanguages.reply_to": "<emoji id=5870903672937911120>👀</emoji> <b>Reply to a language pack file</b>",

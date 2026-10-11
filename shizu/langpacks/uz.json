@@ -49,6 +49,7 @@
   "shizu.modules.ShizuInfo.custom_msg": "Foydalanuvchi xabari {mention}, {version}, {prefix}, {branch}, {platform} kalit so'zlarini o'z ichiga olishi kerak",
   "shizu.modules.ShizuInfo.custom_button": "Foydalanuvchi tugmasi matn va url ni o'z ichiga olishi kerak",
   "shizu.modules.ShizuInfo.photo_url": "Rasm url manzili to'g'ri bo'lishi kerak",
+  "shizu.modules.ShizuInfo.rich": "Info xabarini banner, jadval va alohida tugma qatori bilan rich-karta sifatida yuborish",
   "shizu.modules.ShizuLanguages.incorrect_language": "<emoji id=5807626765874499116>🚫</emoji> <b>Noto'g'ri til</b>",
   "shizu.modules.ShizuLanguages.language_saved": "{} <b>Til saqlandi</b>",
   "shizu.modules.ShizuLanguages.reply_to": "<emoji id=5870903672937911120>👀</emoji> <b>Til paketiga javob bering</b>",

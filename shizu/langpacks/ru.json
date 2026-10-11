@@ -51,6 +51,7 @@
   "shizu.modules.ShizuInfo.custom_msg": "Пользовательское сообщение должно содержать ключевые слова {mention}, {version}, {prefix}, {branch}, {platform}",
   "shizu.modules.ShizuInfo.custom_button": "Пользовательская кнопка должна содержать текст и URL",
   "shizu.modules.ShizuInfo.photo_url": "URL фотографии должен быть действительным",
+  "shizu.modules.ShizuInfo.rich": "Отправлять info как rich-карточку с баннером, таблицей и отдельной строкой кнопки",
   "shizu.modules.ShizuLanguages.incorrect_language": "<emoji id=5807626765874499116>🚫</emoji> <b>Неверный язык</b>",
   "shizu.modules.ShizuLanguages.language_saved": "{} <b>Язык сохранён</b>",
   "shizu.modules.ShizuLanguages.reply_to": "<emoji id=5870903672937911120>👀</emoji> <b>Ответьте на файл языкового пакета</b>",
