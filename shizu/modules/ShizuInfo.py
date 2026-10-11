@@ -81,11 +81,11 @@ class InformationMod(loader.Module):
 
         stats = utils.render_table(
             [
-                ["Version", ".".join(map(str, version.__version__))],
-                ["Branch", version.branch],
-                ["Platform", utils.get_platform()],
-                ["Prefix", prefix],
-                ["Bot", f"@{username}"],
+                [self.strings("label_version"), ".".join(map(str, version.__version__))],
+                [self.strings("label_branch"), version.branch],
+                [self.strings("label_platform"), utils.get_platform()],
+                [self.strings("label_prefix"), prefix],
+                [self.strings("label_bot"), f"@{username}"],
             ]
         )
         return f"🐙 <b>Shizu</b> — {mention}\n{stats}"
