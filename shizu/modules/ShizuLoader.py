@@ -41,6 +41,7 @@ import time
 from urllib.parse import urlparse
 
 import requests
+from aiogram.types import InputFile
 from pyrogram import Client, enums, types
 
 from shizu import loader, utils
@@ -53,11 +54,22 @@ VALID_PIP_PACKAGES = re.compile(
     re.MULTILINE,
 )
 GIT_REGEX = re.compile(
-    r"^https://github\.com((?:/[a-z0-9-]+){2})(?:/tree/([a-z0-9-]+)((?:/[a-z0-9-]+)*))?/?$",
+    r"^https://github\.com(/[a-z0-9-]+/[a-z0-9_.-]+)(?:/tree/([a-z0-9_.-]+)((?:/[a-z0-9_.-]+)*))?/?\Z",
     flags=re.IGNORECASE,
 )
 
 logger = logging.getLogger(__name__)
+
+
+class RepositoryLink(loader.Validators.Link):
+    def validate(self, value):
+        value = super().validate(value)
+        if not GIT_REGEX.fullmatch(value):
+            raise ValueError(
+                "Use a GitHub repository link: "
+                "https://github.com/owner/repository[/tree/branch/path]"
+            )
+        return value
 
 
 @loader.module(name="ShizuLoader", author="shizu")
@@ -68,16 +80,191 @@ class Loader(loader.Module):
 
     def __init__(self):
         self.config = loader.ModuleConfig(
-            "repo",
-            "https://github.com/AmoreForever/ShizuMods",
-            "Repository link",
-            "private_repo",
-            None,
-            "Private repository link",
-            "private_token",
-            None,
-            "Private repository token",
+            loader.ConfigValue(
+                "repo",
+                "https://github.com/AmoreForever/ShizuMods",
+                lambda: self.strings("cfg_repo"),
+                validator=RepositoryLink(),
+            ),
+            loader.ConfigValue(
+                "additional_repos",
+                [],
+                lambda: self.strings("cfg_additional_repos"),
+                validator=loader.validators.Series(validator=RepositoryLink()),
+            ),
+            loader.ConfigValue(
+                "private_repo",
+                None,
+                lambda: self.strings("cfg_private_repo"),
+                validator=loader.validators.Union(
+                    loader.validators.NoneType(), RepositoryLink()
+                ),
+            ),
+            loader.ConfigValue(
+                "private_token",
+                None,
+                lambda: self.strings("cfg_private_token"),
+                validator=loader.validators.Hidden(),
+            ),
+            loader.ConfigValue(
+                "notify_updates",
+                True,
+                lambda: self.strings("cfg_notify_updates"),
+                validator=loader.validators.Boolean(),
+            ),
+            loader.ConfigValue(
+                "update_check_interval",
+                3600,
+                lambda: self.strings("cfg_update_check_interval"),
+                validator=loader.validators.Integer(minimum=300),
+            ),
         )
+
+    def _repositories(self):
+        repositories = [
+            (repo, None)
+            for repo in dict.fromkeys(
+                [self.config["repo"], *(self.config["additional_repos"] or [])]
+            )
+            if repo
+        ]
+        if self.config["private_repo"] and self.config["private_token"]:
+            repositories.append(
+                (self.config["private_repo"], self.config["private_token"])
+            )
+        return repositories
+
+    def _repository_module(self, url: str) -> bool:
+        """Match the installed source to a configured repository and optional tree."""
+        try:
+            parsed = urlparse(url)
+            if (
+                parsed.scheme != "https"
+                or parsed.hostname != "raw.githubusercontent.com"
+                or parsed.port not in (None, 443)
+                or parsed.username is not None
+                or parsed.password is not None
+            ):
+                return False
+        except (ValueError, TypeError):
+            return False
+        for repo, _ in self._repositories():
+            if not (match := GIT_REGEX.fullmatch(repo)):
+                continue
+            repo_path, branch, path = match.groups()
+            if parsed.path[: len(repo_path)].lower() != repo_path.lower():
+                continue
+            remainder = parsed.path[len(repo_path) :]
+            prefix = f"/{branch}{path or ''}/" if branch else "/"
+            if remainder.startswith(prefix):
+                return True
+        return False
+
+    def _watched_modules(self):
+        return {
+            url: module.name
+            for module in list(self.all_modules.modules)
+            if self._repository_module(url := self._origin(module))
+        }
+
+    @loader.loop(interval="update_check_interval", autostart=True, wait_before=True)
+    async def check_module_updates(self):
+        """Announce changed pinned sources without installing or approving them."""
+        if not self.config["notify_updates"]:
+            return
+        registry = self.all_modules.remote_modules
+        modules = self._watched_modules()
+        notified = self.get("notified_updates", {})
+        notified = {url: value for url, value in notified.items() if url in modules}
+        if notified != self.get("notified_updates", {}):
+            self.set("notified_updates", notified)
+        for url, name in modules.items():
+            try:
+                record = registry.record(url)
+                if not record or not record.get("sha256") or record.get("previous"):
+                    continue
+                token, update = await registry.prepare_update(
+                    url, self._remote_headers(url)
+                )
+                registry.cancel_update(token)
+                if update.candidate.sha256 == update.previous_sha256:
+                    if url in notified:
+                        notified.pop(url)
+                        self.set("notified_updates", dict(notified))
+                    continue
+                fingerprint = {
+                    "installed": update.previous_sha256,
+                    "available": update.candidate.sha256,
+                }
+                if notified.get(url) == fingerprint:
+                    continue
+                await self.bot.bot.send_message(
+                    self.me.id,
+                    self.strings("module_update_available").format(
+                        utils.escape_html(name),
+                        utils.escape_html(url),
+                        utils.escape_html(self.get_prefix()),
+                    ),
+                    reply_markup=self.bot._generate_markup(
+                        [
+                            [
+                                {
+                                    "text": self.strings("update_open"),
+                                    "callback": self.inline__module_update,
+                                    "args": (url, True),
+                                    "force_me": True,
+                                },
+                                {
+                                    "text": self.strings("update_skip"),
+                                    "callback": self.inline__module_update,
+                                    "args": (url, False),
+                                    "force_me": True,
+                                },
+                            ]
+                        ]
+                    ),
+                    disable_web_page_preview=True,
+                )
+                notified[url] = fingerprint
+                self.set("notified_updates", dict(notified))
+            except Exception:
+                logger.exception("Failed to check or announce module update for %s", url)
+
+    async def _edit_update_message(self, call, text, reply_markup=None):
+        """Update cards work both in inline forms and in the bot's private chat."""
+        if getattr(call, "message", None):
+            return await call.message.edit_text(
+                self.bot.sanitise_text(text),
+                reply_markup=self.bot._generate_markup(reply_markup or []),
+                disable_web_page_preview=True,
+            )
+        return await call.edit(text, reply_markup=reply_markup)
+
+    async def inline__module_update(self, call, url: str, review: bool):
+        if call.from_user.id != self.me.id:
+            return await call.answer(self.strings("update_owner"), show_alert=True)
+        await call.answer()
+        if not review:
+            return await self._edit_update_message(call, self.strings("update_skipped"))
+        if url not in self._watched_modules():
+            return await self._edit_update_message(call, self.strings("update_unavailable"))
+        registry = self.all_modules.remote_modules
+        try:
+            token, update = await registry.prepare_update(url, self._remote_headers(url))
+        except (RemoteModuleError, requests.exceptions.RequestException, OSError) as error:
+            return await self._edit_update_message(
+                call, self.strings("remote_error").format(utils.escape_html(str(error)))
+            )
+        if update.candidate.sha256 == update.previous_sha256:
+            registry.cancel_update(token)
+            return await self._edit_update_message(call, self.strings("up_to_date"))
+        try:
+            return await self._edit_update_message(
+                call, self._update_review_text(update), self._update_buttons(token)
+            )
+        except Exception:
+            registry.cancel_update(token)
+            raise
 
     @loader.command(aliases=["dlm"])
     async def dlmod(self, app: Client, message: types.Message):
@@ -88,13 +275,8 @@ class Loader(loader.Module):
             return await self._install_remote(message, args)
 
         try:
-            repositories = [(self.config["repo"], None)]
-            if self.config["private_repo"] and self.config["private_token"]:
-                repositories.append(
-                    (self.config["private_repo"], self.config["private_token"])
-                )
             catalogs = []
-            for repo, token in repositories:
+            for repo, token in self._repositories():
                 raw = await self.get_git_raw_link(repo, token)
                 if not raw:
                     return await message.answer(self.strings("invalid_repo"))
@@ -220,32 +402,43 @@ class Loader(loader.Module):
             registry.cancel_update(token)
             return await message.answer(self.strings("up_to_date"))
         return await message.answer(
-            self.strings("update_review").format(
-                utils.escape_html(url), update.previous_sha256, update.candidate.sha256
-            ),
-            reply_markup=[
-                [
-                    {
-                        "text": self.strings("update_confirm"),
-                        "callback": self.inline__update,
-                        "args": (token, True),
-                    },
-                    {
-                        "text": self.strings("update_cancel"),
-                        "callback": self.inline__update,
-                        "args": (token, False),
-                    },
-                ],
-                [
-                    {
-                        "text": self.strings("code"),
-                        "callback": self.inline__update_code,
-                        "args": (token,),
-                    }
-                ],
-            ],
+            self._update_review_text(update),
+            reply_markup=self._update_buttons(token),
             force_me=True,
         )
+
+    def _update_review_text(self, update):
+        return self.strings("update_review").format(
+            utils.escape_html(update.candidate.url),
+            update.previous_sha256,
+            update.candidate.sha256,
+        )
+
+    def _update_buttons(self, token):
+        return [
+            [
+                {
+                    "text": self.strings("update_confirm"),
+                    "callback": self.inline__update,
+                    "args": (token, True),
+                    "force_me": True,
+                },
+                {
+                    "text": self.strings("update_cancel"),
+                    "callback": self.inline__update,
+                    "args": (token, False),
+                    "force_me": True,
+                },
+            ],
+            [
+                {
+                    "text": self.strings("code"),
+                    "callback": self.inline__update_code,
+                    "args": (token,),
+                    "force_me": True,
+                }
+            ],
+        ]
 
     async def inline__update_code(self, call, token: str):
         if call.from_user.id != self.me.id:
@@ -257,6 +450,10 @@ class Loader(loader.Module):
         await call.answer()
         file = io.BytesIO(update.candidate.source.encode("utf-8"))
         file.name = "module-update.py"
+        if getattr(call, "message", None):
+            return await self.bot.bot.send_document(
+                call.message.chat.id, InputFile(file, filename=file.name)
+            )
         await self.app.send_document(call.form["chat"], file)
 
     async def inline__update(self, call, token: str, allow: bool):
@@ -270,7 +467,7 @@ class Loader(loader.Module):
                 return await call.answer(str(error), show_alert=True)
             registry.cancel_update(token)
             await call.answer()
-            return await call.edit(self.strings("update_cancelled"))
+            return await self._edit_update_message(call, self.strings("update_cancelled"))
         try:
             item = registry.confirm_update(token)
         except (RemoteModuleError, OSError) as error:
@@ -292,22 +489,25 @@ class Loader(loader.Module):
         except Exception as error:
             registry.rollback_update(item.url, item.sha256)
             logger.exception("Failed to apply confirmed update of %s", item.url)
-            return await call.edit(
+            return await self._edit_update_message(
+                call,
                 self.strings("remote_error").format(utils.escape_html(str(error)))
             )
         if result == "PENDING":
-            return await call.edit(self.strings("pending"))
+            return await self._edit_update_message(call, self.strings("pending"))
         if result in ("LIBRARY_UPDATED", "LIBRARY_READY"):
-            return await call.edit(self.strings("library_updated"))
+            return await self._edit_update_message(call, self.strings("library_updated"))
         if (
             isinstance(result, str)
             and result not in ("DENIED", "NFA", "OTL")
             and (module := self.all_modules.find_module_strict(result))
         ):
             await self.all_modules.call_hook(module, "on_dlmod")
-            return await call.edit(await self._loaded_text(module, "▫️"))
+            return await self._edit_update_message(
+                call, await self._loaded_text(module, "▫️")
+            )
         registry.rollback_update(item.url, item.sha256)
-        await call.edit(self.strings("update_failed"))
+        await self._edit_update_message(call, self.strings("update_failed"))
 
     async def get_git_raw_link(self, repo_url: str, token: str = None):
         self.all_modules.remote_modules.validate_url(repo_url)
