@@ -18,6 +18,7 @@ import sys
 
 from meval import meval
 from pyrogram import Client, types
+from pyrogram.types.messages_and_media.message import Str
 from telethon.sessions import StringSession
 
 from shizu import loader, logger, utils
@@ -36,6 +37,8 @@ class EvaluatorMod(loader.Module):
 
         try:
             result = await meval(args, globals(), **self.getattrs(app, message))
+            if isinstance(result, Str):
+                result = result.html
 
             return await message.answer(
                 "<b>🖥 Code:</b>\n"
