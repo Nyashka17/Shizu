@@ -14,6 +14,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import contextlib
+import re
 import sys
 
 from meval import meval
@@ -32,19 +33,31 @@ class EvaluatorMod(loader.Module):
 
     @loader.command(aliases=["e"])
     async def eval(self, app: Client, message: types.Message):
-        """Execute Python code and return the result"""
+        """Execute Python code. Usage: e [--lang python|html|curl|...] <code>"""
         args = message.get_args_raw()
 
         try:
+            language = None
+            if args.split(maxsplit=1)[:1] == ["--lang"]:
+                parts = args.split(maxsplit=2)
+                if len(parts) != 3 or not re.fullmatch(
+                    r"[A-Za-z][A-Za-z0-9_+.-]{0,31}", parts[1]
+                ):
+                    raise ValueError("Usage: e --lang <language> <code>")
+                _, language, args = parts
+
             result = await meval(args, globals(), **self.getattrs(app, message))
             if isinstance(result, Str):
                 result = result.html
+                language = language or "html"
+            language = language or "python"
 
             return await message.answer(
                 "<b>🖥 Code:</b>\n"
-                f"<pre language='python'>{args}</pre>\n\n"
+                f"<pre language='python'>{utils.escape_html(args)}</pre>\n\n"
                 f"✅ <b>Result:</b>\n"
-                f"<code>{utils.escape_html(await self.censor(app, str(result)))}</code>",
+                f"<pre language='{language}'>"
+                f"{utils.escape_html(await self.censor(app, str(result)))}</pre>",
             )
         except Exception:
             item = logger.CustomException.from_exc_info(*sys.exc_info())
@@ -58,7 +71,7 @@ class EvaluatorMod(loader.Module):
             exc = await self.censor(app, exc)
             return await message.answer(
                 "<b>🖥 Code:</b>\n"
-                f"<pre language='python'>{args}</pre>\n\n"
+                f"<pre language='python'>{utils.escape_html(args)}</pre>\n\n"
                 "🚫 <b>Result:</b>\n"
                 f"<pre language='error'>{exc}</pre>",
             )
@@ -86,6 +99,10 @@ class EvaluatorMod(loader.Module):
         return text
 
     def getattrs(self, app: Client, message: types.Message):
+        reply = message.reply_to_message
+        if isinstance(reply, types.Message):
+            reply.text = utils.get_message_text(reply)
+            reply.caption = utils.get_message_text(reply, caption=True)
         return {
             "self": self,
             "db": self.db,
@@ -98,8 +115,8 @@ class EvaluatorMod(loader.Module):
             "m": message,
             "chat": message.chat,
             "user": message.from_user,
-            "reply": message.reply_to_message,
-            "r": message.reply_to_message,
+            "reply": reply,
+            "r": reply,
             "utils": utils,
-            "ruser": getattr(message.reply_to_message, "from_user", None),
+            "ruser": getattr(reply, "from_user", None),
         }

@@ -58,6 +58,7 @@ from pyrogram.raw.types.message_entity_underline import MessageEntityUnderline
 from pyrogram.raw.types.message_entity_unknown import MessageEntityUnknown
 from pyrogram.raw.types.message_entity_url import MessageEntityUrl
 from pyrogram.types import Chat, Message, User
+from pyrogram.types.messages_and_media.message import Str
 
 from shizu import database
 from shizu.telegram.state import TelethonConnectionState
@@ -133,6 +134,27 @@ def chunks(_list: list | tuple | set, n: int, /) -> list:
     return [_list[i : i + n] for i in range(0, len(_list), n)]
 
 
+def get_message_text(message: Message, *, caption: bool = False) -> Str | None:
+    """Keep Telegram entities attached to text, including a media caption alias."""
+    text = message.caption if caption else message.text
+    entities = message.caption_entities if caption else message.entities
+    if text is None and not caption:
+        text, entities = message.caption, message.caption_entities
+    elif (
+        not caption
+        and text is not None
+        and entities is None
+        and message.caption is not None
+        and str(text) == str(message.caption)
+    ):
+        entities = message.caption_entities
+    if text is None:
+        return None
+    if isinstance(text, Str) and (entities is None or entities == text.entities):
+        return text
+    return Str(str(text)).init(entities)
+
+
 def get_full_command(
     message: Message,
 ) -> tuple[Literal[""], Literal[""], Literal[""]] | tuple[str, str, str]:
@@ -142,16 +164,13 @@ def get_full_command(
         message (`program.types.Message`):
     Message
     """
-    message.text = str(message.text or message.caption)
+    message.text = get_message_text(message)
+    text = str(message.text or "")
     prefixes = database.db.get("shizu.loader", "prefixes", ["."])
 
     for prefix in prefixes:
-        if (
-            message.text
-            and len(message.text) > len(prefix)
-            and message.text.startswith(prefix)
-        ):
-            command, *args = message.text[len(prefix) :].split(maxsplit=1)
+        if text and len(text) > len(prefix) and text.startswith(prefix):
+            command, *args = text[len(prefix) :].split(maxsplit=1)
             break
     else:
         return "", "", ""
