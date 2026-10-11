@@ -36,7 +36,9 @@ import asyncio
 import base64
 import collections
 import configparser as cp
+import logging
 import os
+import re
 import secrets
 import string
 import time
@@ -56,6 +58,7 @@ from shizu.telegram.device import TelegramDeviceProfile
 from shizu.web.telethon_setup import TelethonSetupController
 
 BASE_DIR = os.path.dirname(utils.get_base_dir())
+logger = logging.getLogger(__name__)
 
 
 class Web:
@@ -67,6 +70,7 @@ class Web:
         self.app.router.add_get("/initialSetup", self.initial_setup)
         self.app.router.add_put("/setApi", self.set_tg_api)
         self.app.router.add_post("/sendTgCode", self.send_tg_code)
+        self.app.router.add_post("/resendTgCode", self.resend_tg_code)
         self.app.router.add_post("/tgCode", self.tg_code)
         self.app.router.add_post("/finishLogin", self.finish_login)
         self.app.router.add_post("/qrLogin", self.qr_login)
@@ -85,6 +89,9 @@ class Web:
         self.client = None
         self.authenticated = False
         self.phone_code_hash = None
+        self.sent_code = None
+        self.code_resend_at = 0
+        self._login_lock = asyncio.Lock()
         self.qr = None
         self.clients_set = asyncio.Event()
         self.root_redirected = asyncio.Event()
@@ -144,23 +151,190 @@ class Web:
         self.api_set.set()
         return web.Response()
 
+    @staticmethod
+    def normalize_phone(phone):
+        """Keep the supplied country code; accept +CC, 00CC and bare CC."""
+        if not isinstance(phone, str) or len(phone) > 64:
+            raise ValueError("Invalid phone number")
+        phone = re.sub(r"[\s().\-\u2010-\u2015]", "", phone)
+        if phone.startswith("00"):
+            phone = phone[2:]
+        phone = "+" + phone.removeprefix("+")
+        if not re.fullmatch(r"\+[1-9][0-9]{6,14}", phone):
+            raise ValueError("Invalid phone number")
+        return phone
+
+    @staticmethod
+    def code_error(error):
+        """Return a useful failure without exposing RPC arguments or credentials."""
+        logger.warning("Telegram setup code request failed: %s", type(error).__name__)
+        if isinstance(error, errors.PhoneNumberInvalid):
+            message, status = (
+                "Invalid phone number. Include the country code, for example +48 for Poland.",
+                400,
+            )
+        elif isinstance(error, errors.PhoneNumberBanned):
+            message, status = "Telegram has banned this phone number.", 403
+        elif isinstance(error, errors.FloodWait):
+            seconds = max(1, int(error.value))
+            return web.json_response(
+                {
+                    "error": f"Telegram limits login attempts. Try again in {seconds} seconds.",
+                    "retry_after": seconds,
+                },
+                status=429,
+            )
+        elif isinstance(error, (errors.PhoneNumberFlood, errors.PhonePasswordFlood)):
+            message, status = (
+                "Telegram limits login attempts for this number. Try again later; repeated requests can extend the limit.",
+                429,
+            )
+        elif isinstance(error, errors.PhoneNumberUnoccupied):
+            message, status = (
+                "This number has no Telegram account. Register it in the official Telegram app first.",
+                400,
+            )
+        elif isinstance(
+            error, (errors.SendCodeUnavailable, errors.SmsCodeCreateFailed)
+        ):
+            message, status = (
+                "Telegram could not deliver a login code. Use QR login or try again later.",
+                503,
+            )
+        elif isinstance(error, errors.UpdateAppToLogin):
+            message, status = (
+                "Telegram requires a different login flow. Use QR login.",
+                409,
+            )
+        elif isinstance(error, (OSError, asyncio.TimeoutError)):
+            message, status = (
+                "Could not connect to Telegram. Check the server connection and try again.",
+                503,
+            )
+        else:
+            message, status = (
+                "Telegram rejected the code request. Try QR login or try again later.",
+                503,
+            )
+        return web.json_response({"error": message}, status=status)
+
+    def _save_sent_code(self, phone, client, sent):
+        delivery = getattr(getattr(sent, "type", None), "name", "")
+        hints = {
+            "APP": "Open Telegram on a device already signed in to this account. The code arrives in the Telegram service chat, not by SMS.",
+            "SMS": "Telegram sent the code by SMS to this phone number.",
+            "CALL": "Telegram will call this number and read out the login code.",
+            "MISSED_CALL": "Enter the last digits of the number from Telegram's missed call.",
+            "FRAGMENT_SMS": "Retrieve your login code from Fragment for this number.",
+            "SMS_WORD": "Enter the word from Telegram's SMS.",
+            "SMS_PHRASE": "Enter the phrase from Telegram's SMS.",
+            "FIREBASE_SMS": "Telegram requires verification in its official mobile app before sending this SMS. Use QR login, or wait for another delivery method if available.",
+            "EMAIL_CODE": "Telegram selected email verification, which this setup does not support. Use QR login.",
+            "SETUP_EMAIL_REQUIRED": "Telegram requires a login email to be configured in its official app. Use QR login.",
+            "FLASH_CALL": "Telegram selected flash-call verification. Use QR login.",
+        }
+        supported = delivery in {
+            "APP",
+            "SMS",
+            "CALL",
+            "MISSED_CALL",
+            "FRAGMENT_SMS",
+            "SMS_WORD",
+            "SMS_PHRASE",
+        }
+        code_hash = getattr(sent, "phone_code_hash", None)
+        if not code_hash:
+            return web.json_response(
+                {"error": "Telegram returned an unsupported login flow. Use QR login."},
+                status=409,
+            )
+        self.phone_code_hash = code_hash
+        self.sign_in_clients[phone] = client
+        timeout = max(0, int(getattr(sent, "timeout", None) or 0))
+        self.code_resend_at = time.monotonic() + timeout
+        self.sent_code = {
+            "phone": phone,
+            "delivery": delivery,
+            "message": hints.get(
+                delivery,
+                "Telegram selected an unsupported verification method. Use QR login.",
+            ),
+            "supported": supported,
+            "numeric": delivery not in {"SMS_WORD", "SMS_PHRASE"},
+            "can_resend": bool(getattr(sent, "next_type", None)),
+            "timeout": timeout,
+        }
+        SecretRedactor.remember(code_hash)
+        return web.json_response(self.sent_code)
+
     async def send_tg_code(self, request):
-        phone = await request.text()
-        if not phone:
+        try:
+            phone = self.normalize_phone(await request.text())
+        except ValueError:
+            return web.json_response(
+                {
+                    "error": "Enter an international phone number with country code, for example +48 123 456 789."
+                },
+                status=400,
+            )
+        async with self._login_lock:
+            if self.api_token is None or self.authenticated:
+                return web.Response(status=400)
+            try:
+                client = await self.new_client()
+                sent = await client.send_code(phone)
+            except (errors.RPCError, OSError, asyncio.TimeoutError) as error:
+                return self.code_error(error)
+            return self._save_sent_code(phone, client, sent)
+
+    async def resend_tg_code(self, request):
+        try:
+            phone = self.normalize_phone(await request.text())
+        except ValueError:
             return web.Response(status=400)
-        if self.api_token is None or self.authenticated:
-            return web.Response(status=400)
-        client = await self.new_client()
-        while True:
-            phone_hash = (await self.client.send_code(phone)).phone_code_hash
-            self.phone_code_hash = phone_hash
-            self.sign_in_clients[phone] = client
-            return web.Response()
+        async with self._login_lock:
+            if (
+                self.authenticated
+                or not self.sent_code
+                or phone != self.sent_code["phone"]
+                or self.client is not self.sign_in_clients.get(phone)
+            ):
+                return web.json_response(
+                    {
+                        "error": "This login attempt expired. Enter your phone number again."
+                    },
+                    status=409,
+                )
+            if not self.sent_code["can_resend"]:
+                return web.json_response(
+                    {
+                        "error": "Telegram did not offer another code delivery method. Use QR login."
+                    },
+                    status=409,
+                )
+            remaining = self.code_resend_at - time.monotonic()
+            if remaining > 0:
+                seconds = int(remaining) + 1
+                return web.json_response(
+                    {
+                        "error": f"Wait {seconds} seconds before requesting another code.",
+                        "retry_after": seconds,
+                    },
+                    status=429,
+                )
+            try:
+                sent = await self.client.resend_code(phone, self.phone_code_hash)
+            except (errors.RPCError, OSError, asyncio.TimeoutError) as error:
+                return self.code_error(error)
+            return self._save_sent_code(phone, self.client, sent)
 
     async def new_client(self):
-        if self.client is not None:
+        if self.client is not None and self.client.is_connected:
             await self.client.disconnect()
         self.sign_in_clients.clear()
+        self.phone_code_hash = None
+        self.sent_code = None
+        self.code_resend_at = 0
         self.qr = None
         self.client = pyrogram.client.Client(
             name="../shizu",
@@ -213,6 +387,10 @@ class Web:
         return self._authorize_browser(web.json_response({"done": True}), request)
 
     async def qr_login(self, request):
+        async with self._login_lock:
+            return await self._qr_login(request)
+
+    async def _qr_login(self, request):
         if self.api_token is None or self.authenticated:
             return web.Response(status=400)
         if self.qr is None:
@@ -249,6 +427,10 @@ class Web:
         return web.json_response({"svg": self.qr["svg"]})
 
     async def qr_password(self, request):
+        async with self._login_lock:
+            return await self._qr_password(request)
+
+    async def _qr_password(self, request):
         if self.authenticated or not (self.qr or {}).get("password"):
             return web.Response(status=400)
         password = await request.text()
@@ -263,28 +445,51 @@ class Web:
         return await self.qr_authorized(user.id, request)
 
     async def tg_code(self, request):
+        async with self._login_lock:
+            return await self._tg_code(request)
+
+    async def _tg_code(self, request):
         text = await request.text()
         if len(text) < 6:
             return web.Response(status=400)
         split = text.split("\n", 2)
         if len(split) not in (2, 3):
             return web.Response(status=400)
-        code = split[0]
-        phone = split[1]
+        code = split[0].strip()
+        try:
+            phone = self.normalize_phone(split[1])
+        except ValueError:
+            return web.Response(status=400)
         password = split[2] if len(split) == 3 else ""
         if self.client is None or phone not in self.sign_in_clients:
             return web.Response(status=400)
         if (
-            (len(code) != 5 and not password)
-            or any(c not in string.digits for c in code)
-            or not phone
+            not code
+            or len(code) > 128
+            or (
+                self.sent_code
+                and (
+                    not self.sent_code["supported"]
+                    or (
+                        self.sent_code["numeric"]
+                        and not re.fullmatch(r"[0-9]{4,10}", code)
+                    )
+                )
+            )
         ):
             return web.Response(status=400)
         if not password:
             try:
-                await self.client.sign_in(
+                user = await self.client.sign_in(
                     phone, phone_code=code, phone_code_hash=self.phone_code_hash
                 )
+                if not user or isinstance(user, pyrogram.types.TermsOfService):
+                    return web.json_response(
+                        {
+                            "error": "This number has no Telegram account. Register it in the official Telegram app first."
+                        },
+                        status=400,
+                    )
             except errors.exceptions.SessionPasswordNeeded:
                 return web.Response(status=401)  # Requires 2FA login
             except errors.exceptions.PhoneCodeExpired:

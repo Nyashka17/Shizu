@@ -87,18 +87,32 @@ class DashboardServer(TunnelManager):
     def text(self, key):
         return self.translator.gettext("shizu.web.panel." + key)
 
-    async def notify(self, key, *values, reply_markup=None):
+    async def notify(self, key, *values, reply_markup=None, message_id=None):
+        text = self.module.strings(key).format(
+            *(html.escape(str(value)) for value in values)
+        )
+        options = {
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+            "reply_markup": reply_markup,
+        }
+        if message_id is not None:
+            try:
+                await asyncio.wait_for(
+                    self.module.bot.bot.edit_message_text(
+                        text,
+                        chat_id=self.module.me.id,
+                        message_id=message_id,
+                        **options,
+                    ),
+                    timeout=8,
+                )
+                return
+            except Exception:
+                logger.warning("Could not update dashboard invitation; sending notice")
         try:
             await asyncio.wait_for(
-                self.module.bot.bot.send_message(
-                    self.module.me.id,
-                    self.module.strings(key).format(
-                        *(html.escape(str(value)) for value in values)
-                    ),
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                    reply_markup=reply_markup,
-                ),
+                self.module.bot.bot.send_message(self.module.me.id, text, **options),
                 timeout=8,
             )
         except Exception:
@@ -203,7 +217,6 @@ class DashboardServer(TunnelManager):
                         "Cloudflare Quick Tunnel could not start; dashboard is local only: %s",
                         error,
                     )
-            await self.notify("web_opened", self.url)
             return self.url
         except BaseException:
             await self.stop()
@@ -222,6 +235,27 @@ class DashboardServer(TunnelManager):
 
     def invitation(self):
         return f"{self.url}/#invite={self.auth.invite()}"
+
+    async def send_invitation(self):
+        invitation = self.invitation()
+        text = self.module.strings("web_link").format(html.escape(invitation))
+        markup = None
+        if self.url.startswith("https://"):
+            markup = InlineKeyboardMarkup().add(
+                InlineKeyboardButton(self.module.strings("btn_web"), url=invitation)
+            )
+        else:
+            text += "\n\n" + self.module.strings("web_local")
+        try:
+            message = await asyncio.wait_for(
+                self.module._send_web_link(text, reply_markup=markup), timeout=8
+            )
+            item = self.auth.invites.get(invitation.partition("#invite=")[2])
+            if item is not None:
+                item["message_id"] = message.message_id
+        except Exception:
+            logger.warning("Could not deliver dashboard invitation to its owner")
+        return text
 
     def _cookie(self, response, request, name, token, max_age):
         secure = request.headers.get("Origin", self.url).startswith("https://")
@@ -403,7 +437,12 @@ class DashboardServer(TunnelManager):
                 callback_data=f"{self.CALLBACK_PREFIX}{session['id']}:revoke",
             )
         )
-        await self.notify("web_login_notice", item["code"], reply_markup=markup)
+        await self.notify(
+            "web_login_notice",
+            item["code"],
+            reply_markup=markup,
+            message_id=item.get("message_id"),
+        )
         return response
 
     async def revoke_session(self, session_id, owner_id):

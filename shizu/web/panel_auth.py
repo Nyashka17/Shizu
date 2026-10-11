@@ -42,7 +42,7 @@ class PanelAuth:
         self.prune()
         if not isinstance(invite, str) or invite not in self.invites:
             return None
-        del self.invites[invite]
+        invitation = self.invites.pop(invite)
         token = secrets.token_urlsafe(32)
         item = {
             "id": secrets.token_hex(12),
@@ -50,6 +50,8 @@ class PanelAuth:
             "status": "pending",
             "expires": time.monotonic() + self.INVITE_TTL,
         }
+        if "message_id" in invitation:
+            item["message_id"] = invitation["message_id"]
         self._insert(self.pending, token, item, 16)
         return token, item
 

@@ -51,17 +51,15 @@ class ShizuPanel(loader.Module):
                 self.dashboard = DashboardServer(self)
                 await self.dashboard.start()
                 self.app.web_panel = self.dashboard
-            text = self.strings("web_link").format(
-                html.escape(self.dashboard.invitation())
-            )
-            if not self.dashboard.url.startswith("https://"):
-                text += "\n\n" + self.strings("web_local")
-            return text
+            return await self.dashboard.send_invitation()
 
-    async def _send_web_link(self, text):
+    async def _send_web_link(self, text, *, reply_markup=None):
         try:
             return await self.bot.bot.send_message(
-                self.me.id, text, disable_web_page_preview=True
+                self.me.id,
+                text,
+                disable_web_page_preview=True,
+                reply_markup=reply_markup,
             )
         except BadRequest as error:
             if not any(
@@ -73,6 +71,7 @@ class ShizuPanel(loader.Module):
                 self.me.id,
                 self.bot.sanitise_text(text),
                 disable_web_page_preview=True,
+                reply_markup=reply_markup,
             )
 
     @loader.command()
@@ -231,10 +230,9 @@ class ShizuPanel(loader.Module):
 
         if action == "web":
             try:
-                text = await self._web_link()
+                await self._web_link()
             except (OSError, ValueError):
-                text = self.strings("web_start_failed")
-            await self._send_web_link(text)
+                await self._send_web_link(self.strings("web_start_failed"))
         elif action == "restart":
             if self.dashboard:
                 await self.dashboard.stop()
