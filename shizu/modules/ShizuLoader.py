@@ -32,13 +32,14 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
+import difflib
 import inspect
 import io
 import logging
 import os
 import re
 import time
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import requests
 from aiogram.types import InputFile
@@ -70,6 +71,25 @@ class RepositoryLink(loader.Validators.Link):
                 "https://github.com/owner/repository[/tree/branch/path]"
             )
         return value
+
+
+class PrivateRepository:
+    def validate(self, value):
+        if not isinstance(value, dict) or set(value) != {"url", "token"}:
+            raise ValueError('Use an object with "url" and "token" fields')
+        try:
+            url = RepositoryLink().validate(value["url"])
+        except (ValueError, TypeError):
+            raise ValueError("Invalid private repository URL") from None
+        token = value["token"]
+        if not isinstance(token, str) or not token.strip():
+            raise ValueError("A private repository token is required")
+        token = token.strip()
+        if not token.isascii() or any(
+            ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in token
+        ):
+            raise ValueError("Invalid private repository token")
+        return {"url": url, "token": token}
 
 
 @loader.module(name="ShizuLoader", author="shizu")
@@ -107,6 +127,14 @@ class Loader(loader.Module):
                 validator=loader.validators.Hidden(),
             ),
             loader.ConfigValue(
+                "private_repos",
+                [],
+                lambda: self.strings("cfg_private_repos"),
+                validator=loader.validators.Hidden(
+                    loader.validators.Series(validator=PrivateRepository())
+                ),
+            ),
+            loader.ConfigValue(
                 "notify_updates",
                 True,
                 lambda: self.strings("cfg_notify_updates"),
@@ -121,17 +149,27 @@ class Loader(loader.Module):
         )
 
     def _repositories(self):
-        repositories = [
+        repositories = {}
+        for repo, token in [
             (repo, None)
-            for repo in dict.fromkeys(
-                [self.config["repo"], *(self.config["additional_repos"] or [])]
-            )
+            for repo in [self.config["repo"], *(self.config["additional_repos"] or [])]
             if repo
-        ]
+        ] + self._private_repositories():
+            match = GIT_REGEX.fullmatch(repo)
+            key = (match[1].lower(), match[2], match[3]) if match else repo
+            repositories[key] = (repo, token)
+        return list(repositories.values())
+
+    def _private_repositories(self):
+        repositories = []
         if self.config["private_repo"] and self.config["private_token"]:
             repositories.append(
                 (self.config["private_repo"], self.config["private_token"])
             )
+        repositories.extend(
+            (entry["url"], entry["token"])
+            for entry in self.config["private_repos"] or []
+        )
         return repositories
 
     def _repository_module(self, url: str) -> bool:
@@ -196,39 +234,58 @@ class Loader(loader.Module):
                     "installed": update.previous_sha256,
                     "available": update.candidate.sha256,
                 }
-                if notified.get(url) == fingerprint:
-                    continue
-                await self.bot.bot.send_message(
-                    self.me.id,
-                    self.strings("module_update_available").format(
-                        utils.escape_html(name),
-                        utils.escape_html(url),
-                        utils.escape_html(self.get_prefix()),
-                    ),
-                    reply_markup=self.bot._generate_markup(
-                        [
-                            [
-                                {
-                                    "text": self.strings("update_open"),
-                                    "callback": self.inline__module_update,
-                                    "args": (url, True),
-                                    "force_me": True,
-                                },
-                                {
-                                    "text": self.strings("update_skip"),
-                                    "callback": self.inline__module_update,
-                                    "args": (url, False),
-                                    "force_me": True,
-                                },
-                            ]
-                        ]
-                    ),
-                    disable_web_page_preview=True,
-                )
-                notified[url] = fingerprint
-                self.set("notified_updates", dict(notified))
+                state = notified.get(url, {})
+                if any(state.get(key) != value for key, value in fingerprint.items()):
+                    await self._send_module_update_notification(name, url)
+                    state = {**fingerprint, "diff_sent": False}
+                    notified[url] = state
+                    self.set("notified_updates", dict(notified))
+                if not state.get("diff_sent"):
+                    await self.bot.bot.send_document(
+                        self.me.id,
+                        InputFile(
+                            self._update_diff_file(update),
+                            filename="module-update.diff",
+                        ),
+                        caption=self.strings("update_diff_caption").format(
+                            utils.escape_html(name)
+                        ),
+                    )
+                    notified[url] = {**state, "diff_sent": True}
+                    self.set("notified_updates", dict(notified))
             except Exception:
-                logger.exception("Failed to check or announce module update for %s", url)
+                logger.exception(
+                    "Failed to check or announce module update for %s", url
+                )
+
+    async def _send_module_update_notification(self, name, url):
+        await self.bot.bot.send_message(
+            self.me.id,
+            self.strings("module_update_available").format(
+                utils.escape_html(name),
+                utils.escape_html(url),
+                utils.escape_html(self.get_prefix()),
+            ),
+            reply_markup=self.bot._generate_markup(
+                [
+                    [
+                        {
+                            "text": self.strings("update_open"),
+                            "callback": self.inline__module_update,
+                            "args": (url, True),
+                            "force_me": True,
+                        },
+                        {
+                            "text": self.strings("update_skip"),
+                            "callback": self.inline__module_update,
+                            "args": (url, False),
+                            "force_me": True,
+                        },
+                    ]
+                ]
+            ),
+            disable_web_page_preview=True,
+        )
 
     async def _edit_update_message(self, call, text, reply_markup=None):
         """Update cards work both in inline forms and in the bot's private chat."""
@@ -247,11 +304,19 @@ class Loader(loader.Module):
         if not review:
             return await self._edit_update_message(call, self.strings("update_skipped"))
         if url not in self._watched_modules():
-            return await self._edit_update_message(call, self.strings("update_unavailable"))
+            return await self._edit_update_message(
+                call, self.strings("update_unavailable")
+            )
         registry = self.all_modules.remote_modules
         try:
-            token, update = await registry.prepare_update(url, self._remote_headers(url))
-        except (RemoteModuleError, requests.exceptions.RequestException, OSError) as error:
+            token, update = await registry.prepare_update(
+                url, self._remote_headers(url)
+            )
+        except (
+            RemoteModuleError,
+            requests.exceptions.RequestException,
+            OSError,
+        ) as error:
             return await self._edit_update_message(
                 call, self.strings("remote_error").format(utils.escape_html(str(error)))
             )
@@ -322,16 +387,32 @@ class Loader(loader.Module):
         return await message.answer(self.strings("inc_link"))
 
     def _remote_headers(self, url: str):
-        repo, token = self.config["private_repo"], self.config["private_token"]
-        match = GIT_REGEX.search(repo or "")
-        parsed = urlparse(url)
-        if (
-            token
-            and match
-            and parsed.hostname == "raw.githubusercontent.com"
-            and parsed.port in (None, 443)
-            and parsed.path.startswith(match[1] + "/")
-        ):
+        try:
+            parsed = urlparse(url)
+            if (
+                parsed.scheme != "https"
+                or parsed.hostname != "raw.githubusercontent.com"
+                or parsed.port not in (None, 443)
+                or parsed.username is not None
+                or parsed.password is not None
+                or any(part in (".", "..") for part in unquote(parsed.path).split("/"))
+            ):
+                return None
+        except (ValueError, TypeError):
+            return None
+        candidates = []
+        for repo, token in self._private_repositories():
+            if not (match := GIT_REGEX.fullmatch(repo)):
+                continue
+            repo_path, branch, path = match.groups()
+            remainder = parsed.path[len(repo_path) :]
+            prefix = f"/{branch}{path or ''}/" if branch else "/"
+            same_repo = parsed.path[: len(repo_path)].lower() == repo_path.lower()
+            if same_repo and remainder.startswith(prefix):
+                candidates.append((len(prefix), token))
+        if candidates:
+            # Prefer the most specific tree; a later entry wins for equal scopes.
+            token = sorted(candidates, key=lambda item: item[0])[-1][1]
             return {"Authorization": f"token {token}"}
         return None
 
@@ -436,9 +517,48 @@ class Loader(loader.Module):
                     "callback": self.inline__update_code,
                     "args": (token,),
                     "force_me": True,
-                }
+                },
+                {
+                    "text": self.strings("update_diff"),
+                    "callback": self.inline__update_diff,
+                    "args": (token,),
+                    "force_me": True,
+                },
             ],
         ]
+
+    @staticmethod
+    def _update_diff_file(update):
+        lines = difflib.unified_diff(
+            update.previous_source.splitlines(keepends=True),
+            update.candidate.source.splitlines(keepends=True),
+            fromfile="installed.py",
+            tofile="new.py",
+        )
+        diff = "".join(
+            line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
+            for line in lines
+        )
+        file = io.BytesIO(diff.encode("utf-8"))
+        file.name = "module-update.diff"
+        return file
+
+    async def _send_update_file(self, call, file):
+        if getattr(call, "message", None):
+            return await self.bot.bot.send_document(
+                call.message.chat.id, InputFile(file, filename=file.name)
+            )
+        return await self.app.send_document(call.form["chat"], file)
+
+    async def inline__update_diff(self, call, token: str):
+        if call.from_user.id != self.me.id:
+            return await call.answer(self.strings("update_owner"), show_alert=True)
+        try:
+            update = self.all_modules.remote_modules.pending_update(token)
+        except RemoteModuleError as error:
+            return await call.answer(str(error), show_alert=True)
+        await call.answer()
+        return await self._send_update_file(call, self._update_diff_file(update))
 
     async def inline__update_code(self, call, token: str):
         if call.from_user.id != self.me.id:
@@ -450,11 +570,7 @@ class Loader(loader.Module):
         await call.answer()
         file = io.BytesIO(update.candidate.source.encode("utf-8"))
         file.name = "module-update.py"
-        if getattr(call, "message", None):
-            return await self.bot.bot.send_document(
-                call.message.chat.id, InputFile(file, filename=file.name)
-            )
-        await self.app.send_document(call.form["chat"], file)
+        return await self._send_update_file(call, file)
 
     async def inline__update(self, call, token: str, allow: bool):
         if call.from_user.id != self.me.id:
@@ -467,7 +583,9 @@ class Loader(loader.Module):
                 return await call.answer(str(error), show_alert=True)
             registry.cancel_update(token)
             await call.answer()
-            return await self._edit_update_message(call, self.strings("update_cancelled"))
+            return await self._edit_update_message(
+                call, self.strings("update_cancelled")
+            )
         try:
             item = registry.confirm_update(token)
         except (RemoteModuleError, OSError) as error:
@@ -490,13 +608,14 @@ class Loader(loader.Module):
             registry.rollback_update(item.url, item.sha256)
             logger.exception("Failed to apply confirmed update of %s", item.url)
             return await self._edit_update_message(
-                call,
-                self.strings("remote_error").format(utils.escape_html(str(error)))
+                call, self.strings("remote_error").format(utils.escape_html(str(error)))
             )
         if result == "PENDING":
             return await self._edit_update_message(call, self.strings("pending"))
         if result in ("LIBRARY_UPDATED", "LIBRARY_READY"):
-            return await self._edit_update_message(call, self.strings("library_updated"))
+            return await self._edit_update_message(
+                call, self.strings("library_updated")
+            )
         if (
             isinstance(result, str)
             and result not in ("DENIED", "NFA", "OTL")

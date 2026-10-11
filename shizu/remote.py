@@ -10,7 +10,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import unquote, urljoin, urlparse
+from urllib.parse import quote, unquote, urlencode, urljoin, urlparse
 
 import requests
 
@@ -54,6 +54,7 @@ class RemoteModuleUpdate:
     candidate: RemoteModuleSource
     previous_sha256: str
     expires: float
+    previous_source: str
 
 
 class RemoteModuleRegistry:
@@ -110,6 +111,26 @@ class RemoteModuleRegistry:
 
     async def request(self, url: str, headers: dict | None = None):
         self.validate_url(url)
+        parsed = urlparse(url)
+        if (
+            parsed.hostname == "raw.githubusercontent.com"
+            and parsed.port in (None, 443)
+            and headers
+            and headers.get("Authorization")
+        ):
+            # Private raw URLs need the authenticated Contents API. Keep the
+            # original URL as the installed identity used for pinning and updates.
+            parts = unquote(parsed.path).split("/", 4)
+            if len(parts) != 5 or not all(parts[1:]):
+                raise RemoteModuleError("Invalid GitHub file URL.")
+            _, owner, repo, ref, path = parts
+            if any(part in (".", "..") for part in unquote(parsed.path).split("/")):
+                raise RemoteModuleError("Invalid GitHub file path.")
+            url = (
+                f"https://api.github.com/repos/{quote(owner, safe='')}/{quote(repo, safe='')}"
+                f"/contents/{quote(path, safe='/')}?{urlencode({'ref': ref})}"
+            )
+            headers = {**headers, "Accept": "application/vnd.github.raw+json"}
         return await utils.run_sync(self._get, url, headers)
 
     async def _download(self, url: str, headers: dict | None = None):
@@ -273,13 +294,25 @@ class RemoteModuleRegistry:
             raise RemoteModuleError(
                 "Finish the pending BeSafe review before requesting another update."
             )
+        previous_source = record.get("source")
+        if not isinstance(previous_source, str):
+            previous_source = (
+                (self.cache_dir / (record["sha256"] + ".py"))
+                .read_bytes()
+                .decode("utf-8")
+            )
+        self.verify(
+            RemoteModuleSource.from_source(url, previous_source), record["sha256"]
+        )
         item = await self._download(url, headers)
         now = time.monotonic()
         self._updates = {
             key: value for key, value in self._updates.items() if value.expires > now
         }
         token = secrets.token_urlsafe(24)
-        update = RemoteModuleUpdate(item, record["sha256"], now + self.UPDATE_TTL)
+        update = RemoteModuleUpdate(
+            item, record["sha256"], now + self.UPDATE_TTL, previous_source
+        )
         self._updates[token] = update
         return token, update
 
