@@ -127,11 +127,15 @@ class BaseDispatcherManager:
         """Send a failed command to the logs chat with a button to report it"""
         markup = None
         if report_id := reports.create(handler, label):
-            markup = InlineKeyboardMarkup().add(
-                InlineKeyboardButton(
-                    "📨 Send to the developer",
-                    callback_data=self.REPORT_PREFIX + report_id,
-                )
+            markup = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="📨 Send to the developer",
+                            callback_data=self.REPORT_PREFIX + report_id,
+                        )
+                    ]
+                ]
             )
         with contextlib.suppress(Exception):
             await bot.send_animation(

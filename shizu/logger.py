@@ -26,10 +26,10 @@ import traceback
 import typing
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
-
 from aiogram import Bot, Dispatcher
-from aiogram.types import ParseMode
-from aiogram.utils.exceptions import MessageNotModified, NetworkError, RetryAfter
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter
 from loguru import logger
 from loguru._better_exceptions import ExceptionFormatter
 from loguru._colorizer import Colorizer
@@ -47,8 +47,8 @@ FORMAT_FOR_TGLOG = logging.Formatter(
 )
 
 with contextlib.suppress(Exception):  # will be simplified in the future
-    bot = Bot(token=db.get("shizu.bot", "token", None), parse_mode="html")
-    dp = Dispatcher(bot)
+    bot = Bot(token=db.get("shizu.bot", "token", None), default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    dp = Dispatcher()
 
 
 def get_valid_level(level: str | int):
@@ -393,7 +393,7 @@ class Telegramhandler(logging.Handler):
             self.chat,
             text,
             parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True,
+            link_preview_options={"is_disabled": True},
             disable_notification=True,
             reply_markup=markup,
         )
@@ -407,11 +407,15 @@ class Telegramhandler(logging.Handler):
             await call.message.edit_text(
                 text,
                 parse_mode=ParseMode.HTML,
-                disable_web_page_preview=True,
+                link_preview_options={"is_disabled": True},
                 reply_markup=self.manager._generate_markup(uid),
             )
-        except MessageNotModified:
-            await call.answer()
+        except TelegramBadRequest as e:
+            if "message is not modified" in str(e).lower():
+                with contextlib.suppress(Exception):
+                    await call.answer()
+                return
+            raise
 
     def _page_buttons(self, uid: str, pages: list, i: int, exc=None) -> list:
         rows = self.manager.build_pagination(
@@ -475,9 +479,9 @@ class Telegramhandler(logging.Handler):
             await self._send(pages[0], lambda uid: self._page_buttons(uid, pages, 0))
             self._retry_delay = self.time_threshold
             return []
-        except RetryAfter as e:
-            self._retry_delay = max(self.time_threshold, e.timeout)
-            self.last_log_time = time.time() + e.timeout
+        except TelegramRetryAfter as e:
+            self._retry_delay = max(self.time_threshold, e.retry_after)
+            self.last_log_time = time.time() + e.retry_after
         except Exception as error:
             self._retry_delay = min(60, max(5, self._retry_delay * 2))
             logging.getLogger(__name__).warning(
@@ -491,7 +495,7 @@ class Telegramhandler(logging.Handler):
 
 def override_text(exception: Exception) -> str | None:
     """Returns error-specific description if available, else `None`"""
-    if isinstance(exception, NetworkError):
+    if isinstance(exception, TelegramNetworkError):
         return "✈️ <b>You have problems with internet connection on your server.</b>"
 
     return None

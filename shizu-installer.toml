@@ -1,0 +1,23 @@
+# Shizu Installer — единый источник истины для версий Python
+# Редактировать вручную после каждого успешного spike.
+
+[python]
+min = "3.11"
+max = "3.14"
+default = "3.11"
+
+[installer]
+uv_dir = ".installer"
+python_dir = ".installer/python"
+cache_dir = ".installer/cache"
+venv_name = ".venv"
+state_dir = ".installer"
+state_file = "state.json"
+
+[users]
+create_system_user = false
+default_shell = "/bin/bash"
+
+[matrix]
+# Зеленая матрица после spike. Обновлять вручную.
+supported = ["3.11", "3.12", "3.13", "3.14"]

@@ -45,7 +45,7 @@ import time
 from urllib.parse import quote, unquote, urlparse
 
 import requests
-from aiogram.types import InputFile
+from aiogram.types import BufferedInputFile
 from pyrogram import Client, enums, types
 
 from shizu import loader, utils
@@ -322,8 +322,8 @@ class Loader(loader.Module):
                 if not state.get("diff_sent"):
                     await self.bot.bot.send_document(
                         self.me.id,
-                        InputFile(
-                            self._update_diff_file(update),
+                        BufferedInputFile(
+                            self._update_diff_file(update).getvalue(),
                             filename="module-update.diff",
                         ),
                         caption=self.strings("update_diff_caption").format(
@@ -746,7 +746,7 @@ class Loader(loader.Module):
     async def _send_update_file(self, call, file):
         if getattr(call, "message", None):
             return await self.bot.bot.send_document(
-                call.message.chat.id, InputFile(file, filename=file.name)
+                call.message.chat.id, BufferedInputFile(file.getvalue(), filename=file.name)
             )
         return await self.app.send_document(call.form["chat"], file)
 

@@ -394,7 +394,9 @@ class Help(loader.Module):
                     title=module.name,
                     description=" | ".join([*commands, *module.inline_handlers])[:100],
                     input_message_content=InputTextMessageContent(
-                        text[:4096], "HTML", disable_web_page_preview=True
+                        message_text=text[:4096],
+                        parse_mode="HTML",
+                        link_preview_options={"is_disabled": True},
                     ),
                 )
             )

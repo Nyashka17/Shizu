@@ -146,6 +146,9 @@ def main():
     parser.add_argument(
         "--no-start", action="store_true", help="Only install dependencies"
     )
+    parser.add_argument(
+        "--no-web", action="store_true", help="Terminal setup instead of web setup"
+    )
     args = parser.parse_args()
     os.chdir(ROOT)
     os.umask(0o077)
@@ -186,12 +189,16 @@ def main():
             run("sudo", "-v")
     elif sys.platform.startswith("linux") and not systemd:
         print("systemd was not found. Start Shizu manually with bash start.sh.")
-    account_config()
+    if args.no_web:
+        account_config()
     print(
         "\nTelegram login: log in with a QR code or your phone number, code and 2FA password.",
         flush=True,
     )
-    run(str(PYTHON), "-u", "-m", "shizu", "--no-web", "--setup-only")
+    setup_cmd = [str(PYTHON), "-u", "-m", "shizu", "--setup-only"]
+    if args.no_web:
+        setup_cmd.insert(3, "--no-web")
+    run(*setup_cmd)
     if use_service:
         username = pwd.getpwuid(os.getuid()).pw_name
         with tempfile.TemporaryDirectory(prefix="shizu-service-") as folder:
@@ -217,10 +224,10 @@ def main():
             "\nStarting Shizu. Press Ctrl+C to stop. Next time start it with: bash start.sh",
             flush=True,
         )
-        os.execv(
-            str(PYTHON),
-            [str(PYTHON), "-u", "-m", "shizu", "--no-web"],
-        )
+        start_cmd = [str(PYTHON), "-u", "-m", "shizu"]
+        if args.no_web:
+            start_cmd.append("--no-web")
+        os.execv(str(PYTHON), start_cmd)
 
 
 if __name__ == "__main__":

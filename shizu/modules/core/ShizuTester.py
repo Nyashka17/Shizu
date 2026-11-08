@@ -44,7 +44,7 @@ import logging
 import time
 
 from aiogram.types import CallbackQuery
-from aiogram.utils.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError
 from pyrogram import Client, types
 
 from shizu import loader, logger

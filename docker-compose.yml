@@ -1,0 +1,28 @@
+services:
+  shizu:
+    build:
+      context: .
+      args:
+        PYTHON_VERSION: 3.11
+    container_name: shizu
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - TZ=UTC
+    volumes:
+      # Конфиг с API ID / API Hash (обязателен)
+      - ./config.ini:/opt/shizu/config.ini:ro
+      # Изменяемые данные: БД, сессии, модули, бэкапы
+      - shizu-data:/opt/shizu/data
+      - shizu-config:/opt/shizu/.config/shizu
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'python -u -m shizu' >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 3
+    # Не запускаем от root внутри контейнера (USER shizu в Dockerfile)
+
+volumes:
+  shizu-data:
+  shizu-config:

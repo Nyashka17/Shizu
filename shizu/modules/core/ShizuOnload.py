@@ -20,12 +20,8 @@ import logging
 import re
 import time
 
-from aiogram.types import CallbackQuery
-from aiogram.utils.exceptions import (
-    ChatNotFound,
-    MessageNotModified,
-    Unauthorized,
-)
+from aiogram.types import CallbackQuery, FSInputFile
+from aiogram.exceptions import TelegramBadRequest, TelegramUnauthorizedError
 from pyrogram import Client, enums
 from pyrogram.errors import (
     AuthKeyDuplicated,
@@ -131,7 +127,7 @@ class ShizuOnload(loader.Module):
             return
         await self._bot.send_photo(
             self.me.id,
-            open("assets/welcome.png", "rb"),
+            FSInputFile("assets/welcome.png"),
             caption=self.strings("welcome"),
             reply_markup=self._welcome_markup(),
         )
@@ -147,7 +143,7 @@ class ShizuOnload(loader.Module):
             return await call.answer()
         self.db.set("shizu.me", "lang", lang)
         await call.answer()
-        with contextlib.suppress(MessageNotModified):
+        with contextlib.suppress(TelegramBadRequest):
             await call.message.edit_caption(
                 self.strings("welcome"), reply_markup=self._welcome_markup()
             )
@@ -215,7 +211,7 @@ class ShizuOnload(loader.Module):
 
         try:
             await self._bot.get_me()
-        except Unauthorized as error:
+        except TelegramUnauthorizedError as error:
             reporter.problem(
                 "bot_token", reporter.BOT_TOKEN.format(utils.escape_html(str(error)))
             )
@@ -394,15 +390,16 @@ class ShizuOnload(loader.Module):
         try:
             await self._bot.send_photo(
                 chat_id=self.db.get("shizu.chat", "logs", None),
-                photo=open("assets/Shizu.png", "rb"),
+                photo=FSInputFile("assets/Shizu.png"),
                 caption=started_text,
                 parse_mode="html",
             )
-        except ChatNotFound:
+        except TelegramBadRequest:
+
             await utils.invite_bot(app, self.db.get("shizu.chat", "logs", None))
             await self._bot.send_photo(
                 chat_id=self.db.get("shizu.chat", "logs", None),
-                photo=open("assets/Shizu.png", "rb"),
+                photo=FSInputFile("assets/Shizu.png"),
                 caption=started_text,
                 parse_mode="html",
             )

@@ -143,38 +143,77 @@ async def edit(
         if isinstance(always_allow, list):
             form["always_allow"] = always_allow
 
+    inline_message_id = inline_message_id or getattr(query, "inline_message_id", None)
+    chat_id = None
+    message_id = None
+    if not inline_message_id and getattr(query, "message", None):
+        chat_id = query.message.chat.id
+        message_id = query.message.message_id
+
     try:
         if rich_message is not None:
             markup = self._generate_markup(reply_markup)
             payload = self._rich_payload(
                 {"rich_message": rich_message, "buttons": reply_markup}
             )
-            await self.bot.request(
-                "editMessageText",
-                {
-                    "inline_message_id": inline_message_id or query.inline_message_id,
-                    "rich_message": json.dumps(payload),
+            await self.bot(
+                aiogram.methods.EditMessageText(
+                    inline_message_id=inline_message_id,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    rich_message=payload,
                     **(
-                        {"reply_markup": markup.as_json()}
+                        {"reply_markup": markup.model_dump(exclude_none=True)}
                         if markup and markup.inline_keyboard
                         else {}
                     ),
-                },
+                )
             )
         else:
+            markup = self._generate_markup(reply_markup) if reply_markup else None
             await self.bot.edit_message_text(
-                text,
-                inline_message_id=inline_message_id or query.inline_message_id,
+                text=text,
+                inline_message_id=inline_message_id,
+                chat_id=chat_id,
+                message_id=message_id,
                 parse_mode="HTML",
-                disable_web_page_preview=disable_web_page_preview,
-                reply_markup=self._generate_markup(reply_markup),
+                link_preview_options={"is_disabled": bool(disable_web_page_preview)},
+                reply_markup=markup,
             )
-    except aiogram.utils.exceptions.MessageNotModified:
-        with contextlib.suppress(aiogram.utils.exceptions.InvalidQueryID):
-            await query.answer()
-    except aiogram.utils.exceptions.RetryAfter as e:
-        logger.info(f"Sleeping {e.timeout}s on aiogram FloodWait...")
-        await asyncio.sleep(e.timeout)
+        with contextlib.suppress(Exception):
+            if getattr(query, "answer", None):
+                await query.answer()
+    except aiogram.exceptions.TelegramBadRequest as _e:
+        msg = str(_e).lower()
+        if "message is not modified" in msg:
+            with contextlib.suppress(aiogram.exceptions.TelegramBadRequest):
+                await query.answer()
+            return
+        if "no text in the message" in msg or "there is no text" in msg:
+            if inline_message_id:
+                await self.bot.edit_message_caption(
+                    inline_message_id=inline_message_id,
+                    caption=text,
+                    parse_mode="HTML",
+                    reply_markup=self._generate_markup(reply_markup) if reply_markup else None,
+                )
+            elif chat_id and message_id:
+                await self.bot.edit_message_caption(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    caption=text,
+                    parse_mode="HTML",
+                    reply_markup=self._generate_markup(reply_markup) if reply_markup else None,
+                )
+            with contextlib.suppress(Exception):
+                await query.answer()
+            return
+        with contextlib.suppress(aiogram.exceptions.TelegramBadRequest):
+            await query.answer("Couldn't edit the message because it was deleted :(")
+        return
+    except aiogram.exceptions.TelegramRetryAfter as e:
+        logger.info(f"Sleeping {e.retry_after}s on aiogram FloodWait...")
+        await asyncio.sleep(e.retry_after)
         return await edit(
             text,
             reply_markup,
@@ -187,18 +226,6 @@ async def edit(
             inline_message_id,
             disable_web_page_preview,
             rich_message,
-        )
-    except aiogram.utils.exceptions.MessageIdInvalid:
-        with contextlib.suppress(aiogram.utils.exceptions.InvalidQueryID):
-            await query.answer("Couldn't edit the message because it was deleted :(")
-    except aiogram.utils.exceptions.BadRequest as error:
-        if "no text in the message" not in str(error).lower():
-            raise
-        await self.bot.edit_message_caption(
-            inline_message_id=inline_message_id or query.inline_message_id,
-            caption=text,
-            parse_mode="HTML",
-            reply_markup=self._generate_markup(reply_markup),
         )
 
 
@@ -224,13 +251,19 @@ async def answer(
     return True
 
 
-class InlineCall(CallbackQuery):
+class InlineCall:
+    """Lightweight call context for inline/input handlers (aiogram 3 compat)."""
+
     def __init__(self):
-        super().__init__()
+        self.inline_message_id = None
+        self.message = None
+        self.from_user = None
+        self.data = None
         self.delete = None
         self.unload = None
+        self.form = None
         self.edit = functools.partial(edit, self=self)
-        self.delete = functools.partial(delete, self=self)
+
 
 
 class Events(Item):
@@ -360,7 +393,14 @@ class Events(Item):
     async def _message_handler(self, message: Message) -> Message:
         if utils.is_system_chat(message.chat.id, self._db):
             return message
-        message.answer = functools.partial(answer, app=self, message=message)
+        try:
+            object.__setattr__(
+                message, "answer", functools.partial(answer, app=self, message=message)
+            )
+        except Exception:
+            # aiogram 3.x/pydantic v2 models are frozen; best-effort attach.
+            setattr(message, "answer", functools.partial(answer, app=self, message=message))
+
         await self._start_payload_handler(message)
 
         for func in self._all_modules.message_handlers.values():
@@ -625,10 +665,8 @@ class Events(Item):
                     InlineQueryResultArticle(
                         id=utils.random_id(),
                         title="Available only to the userbot owner",
-                        input_message_content=InputTextMessageContent(
-                            "🚸 <b>Unfortunately, this is only available to the userbot owner</b>"
-                        ),
-                        thumb_url="https://cdn-icons-png.flaticon.com/512/7754/7754235.png",
+                        input_message_content=InputTextMessageContent(message_text="🚸 <b>Unfortunately, this is only available to the userbot owner</b>"),
+                        thumbnail_url="https://cdn-icons-png.flaticon.com/512/7754/7754235.png",
                     )
                 ],
                 cache_time=0,
@@ -654,16 +692,15 @@ class Events(Item):
                         },
                     }
                     if markup and markup.inline_keyboard:
-                        result["reply_markup"] = markup.to_python()
+                        result["reply_markup"] = markup.model_dump(exclude_none=True)
                     try:
-                        return await self.bot.request(
-                            "answerInlineQuery",
-                            {
-                                "inline_query_id": inline_query.id,
-                                "results": json.dumps([result]),
-                                "cache_time": 0,
-                                "is_personal": True,
-                            },
+                        return await self.bot(
+                            aiogram.methods.AnswerInlineQuery(
+                                inline_query_id=inline_query.id,
+                                results=[result],
+                                cache_time=0,
+                                is_personal=True,
+                            )
                         )
                     except Exception:
                         logger.warning(
@@ -676,11 +713,11 @@ class Events(Item):
                                     id=utils.random_id(),
                                     title="Shizu",
                                     input_message_content=InputTextMessageContent(
-                                        self.RICH_BUTTON_RE.sub(
+                                        message_text=self.RICH_BUTTON_RE.sub(
                                             r"\2", self._forms[query]["text"]
                                         ),
-                                        "HTML",
-                                        disable_web_page_preview=True,
+                                        parse_mode="HTML",
+                                        link_preview_options={"is_disabled": True},
                                     ),
                                     reply_markup=markup,
                                 )
@@ -714,7 +751,7 @@ class Events(Item):
                                 caption=self._forms[query].get("text", None),
                                 parse_mode="HTML",
                                 photo_url=self._forms[query].get("photo", None),
-                                thumb_url=self._forms[query].get("photo", None),
+                                thumbnail_url=self._forms[query].get("photo", None),
                                 reply_markup=self._generate_markup(
                                     query, for_inline_query=True
                                 ),
@@ -732,7 +769,7 @@ class Events(Item):
                                 caption=self._forms[query].get("text", None),
                                 parse_mode="HTML",
                                 video_url=self._forms[query].get("video", None),
-                                thumb_url=self._forms[query].get("video", None),
+                                thumbnail_url=self._forms[query].get("video", None),
                                 reply_markup=self._generate_markup(
                                     query, for_inline_query=True
                                 ),
@@ -750,7 +787,7 @@ class Events(Item):
                                 caption=self._forms[query].get("text", None),
                                 parse_mode="HTML",
                                 gif_url=self._forms[query].get("gif", None),
-                                thumb_url=self._forms[query].get("gif", None),
+                                thumbnail_url=self._forms[query].get("gif", None),
                                 reply_markup=self._generate_markup(
                                     query, for_inline_query=True
                                 ),
@@ -781,11 +818,7 @@ class Events(Item):
                         InlineQueryResultArticle(
                             id=utils.random_id(),
                             title="Shizu",
-                            input_message_content=InputTextMessageContent(
-                                self._forms[query]["text"],
-                                "HTML",
-                                disable_web_page_preview=True,
-                            ),
+                            input_message_content=InputTextMessageContent(message_text=self._forms[query]["text"], parse_mode="HTML", link_preview_options={"is_disabled": True}),
                             reply_markup=self._generate_markup(
                                 query, for_inline_query=True
                             ),
@@ -800,12 +833,12 @@ class Events(Item):
                             id=utils.rand(20),
                             title="Shizu",
                             input_message_content=InputTextMessageContent(
-                                self._forms[query].get(
+                                message_text=self._forms[query].get(
                                     "text",
                                     self._forms[query].get("strings", ["..."])[0],
                                 ),
-                                "HTML",
-                                disable_web_page_preview=True,
+                                parse_mode="HTML",
+                                link_preview_options={"is_disabled": True},
                             ),
                             reply_markup=self._generate_markup(
                                 query, for_inline_query=True
@@ -821,9 +854,9 @@ class Events(Item):
                             id=utils.rand(20),
                             title="Shizu",
                             input_message_content=InputTextMessageContent(
-                                self._forms[query].get("text", None),
-                                "HTML",
-                                disable_web_page_preview=True,
+                                message_text=self._forms[query].get("text", None) or "",
+                                parse_mode="HTML",
+                                link_preview_options={"is_disabled": True},
                             ),
                             reply_markup=self._generate_markup(
                                 query, for_inline_query=True
@@ -844,10 +877,10 @@ class Events(Item):
                                 title=button["input"],
                                 description="⚠️ Please do not remove the identifier!",
                                 input_message_content=InputTextMessageContent(
-                                    "🔄 <b>Just ignore this message...</b>\n"
+                                    message_text="🔄 <b>Just ignore this message...</b>\n"
                                     "<i>This message will be deleted...</i>",
-                                    "HTML",
-                                    disable_web_page_preview=True,
+                                    parse_mode="HTML",
+                                    link_preview_options={"is_disabled": True},
                                 ),
                             )
                         ],
@@ -922,7 +955,7 @@ class Events(Item):
                 answers.append(
                     InlineQueryResultPhoto(
                         photo_url=item["photo"],
-                        thumb_url=item.get("thumb") or item["photo"],
+                        thumbnail_url=item.get("thumb") or item["photo"],
                         title=item.get("title"),
                         description=item.get("description"),
                         caption=text,
@@ -934,7 +967,7 @@ class Events(Item):
                 answers.append(
                     InlineQueryResultGif(
                         gif_url=item["gif"],
-                        thumb_url=item.get("thumb") or item["gif"],
+                        thumbnail_url=item.get("thumb") or item["gif"],
                         title=item.get("title"),
                         caption=text,
                         parse_mode="HTML",
@@ -946,10 +979,8 @@ class Events(Item):
                     InlineQueryResultArticle(
                         title=item.get("title", "Shizu"),
                         description=item.get("description"),
-                        input_message_content=InputTextMessageContent(
-                            text, "HTML", disable_web_page_preview=True
-                        ),
-                        thumb_url=item.get("thumb"),
+                        input_message_content=InputTextMessageContent(message_text=text, parse_mode="HTML", link_preview_options={"is_disabled": True}),
+                        thumbnail_url=item.get("thumb"),
                         **common,
                     )
                 )
@@ -976,16 +1007,20 @@ class Events(Item):
                     title=command,
                     description=doc or tr("shizu.bot.inline_no_description"),
                     input_message_content=InputTextMessageContent(
-                        f"💬 <code>@{username} {command}</code>\n{utils.escape_html(doc)}",
-                        "HTML",
+                        message_text=f"💬 <code>@{username} {command}</code>\n{utils.escape_html(doc)}",
+                        parse_mode="HTML",
                     ),
-                    reply_markup=InlineKeyboardMarkup().add(
-                        InlineKeyboardButton(
-                            tr("shizu.bot.inline_run"),
-                            switch_inline_query_current_chat=f"{command} ",
-                        )
+                    reply_markup=InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [
+                                InlineKeyboardButton(
+                                    text=tr("shizu.bot.inline_run"),
+                                    switch_inline_query_current_chat=f"{command} ",
+                                )
+                            ]
+                        ]
                     ),
-                    thumb_url="https://cdn-icons-png.flaticon.com/512/5278/5278692.png",
+                    thumbnail_url="https://cdn-icons-png.flaticon.com/512/5278/5278692.png",
                 )
             )
 
@@ -995,9 +1030,9 @@ class Events(Item):
                     id=utils.random_id(),
                     title=tr("shizu.bot.inline_no_commands"),
                     input_message_content=InputTextMessageContent(
-                        tr("shizu.bot.inline_no_commands")
+                        message_text=tr("shizu.bot.inline_no_commands")
                     ),
-                    thumb_url="https://cdn-icons-png.flaticon.com/512/2190/2190577.png",
+                    thumbnail_url="https://cdn-icons-png.flaticon.com/512/2190/2190577.png",
                 )
             )
 
@@ -1019,7 +1054,7 @@ class Events(Item):
         elif isinstance(form_uid, InlineKeyboardMarkup):
             return form_uid
 
-        markup = InlineKeyboardMarkup()
+        markup_rows: list[list[InlineKeyboardButton]] = []
 
         for row in (
             self._forms[form_uid]["buttons"] if isinstance(form_uid, str) else form_uid
@@ -1063,38 +1098,39 @@ class Events(Item):
         for row in (
             self._forms[form_uid]["buttons"] if isinstance(form_uid, str) else form_uid
         ):
-            line = []
+            line: list[InlineKeyboardButton] = []
             for button in row:
                 if "ref" in button:
                     continue
                 try:
                     if "url" in button:
-                        line += [
+                        line.append(
                             InlineKeyboardButton(
-                                button["text"],
+                                text=button["text"],
                                 url=button["url"],
                             )
-                        ]
+                        )
                     elif "callback" in button:
-                        line += [
+                        line.append(
                             InlineKeyboardButton(
-                                button["text"], callback_data=button["_callback_data"]
+                                text=button["text"],
+                                callback_data=button["_callback_data"],
                             )
-                        ]
+                        )
                     elif "input" in button:
-                        line += [
+                        line.append(
                             InlineKeyboardButton(
-                                button["text"],
+                                text=button["text"],
                                 switch_inline_query_current_chat=button["_switch_query"]
                                 + " ",
                             )
-                        ]
+                        )
                     elif "data" in button:
-                        line += [
+                        line.append(
                             InlineKeyboardButton(
-                                button["text"], callback_data=button["data"]
+                                text=button["text"], callback_data=button["data"]
                             )
-                        ]
+                        )
                     elif for_inline_query:
                         logger.warning(
                             f"Button skipped in inline query result (not allowed): {button}"
@@ -1112,12 +1148,12 @@ class Events(Item):
                         "passed a wrong type combination for a button. "
                         "Contact the module developer."
                     )
-                    return
+                    return None
 
             if line:
-                markup.row(*line)
+                markup_rows.append(line)
 
-        return markup
+        return InlineKeyboardMarkup(inline_keyboard=markup_rows)
 
     RICH_BUTTON_RE = re.compile(
         r'<tg-button\s+ref="([^"]+)"\s*>(.*?)</tg-button>', re.DOTALL
@@ -1179,10 +1215,11 @@ class Events(Item):
             ):
                 continue
 
-            query.edit = functools.partial(edit, self=self, query=query)
-
             for query_func in mod.callback_handlers.values():
                 try:
+                    object.__setattr__(
+                        query, "edit", functools.partial(edit, self=self, query=query)
+                    )
                     await query_func(query)
                 except Exception:
                     logger.exception("Error on running callback watcher!")
@@ -1216,15 +1253,23 @@ class Events(Item):
                         )
                         return
 
-                    query.edit = functools.partial(
-                        edit, self=self, query=query, form=form, form_uid=form_uid
-                    )
+                    for name, value in (
+                        (
+                            "edit",
+                            functools.partial(
+                                edit, self=self, query=query, form=form, form_uid=form_uid
+                            ),
+                        ),
+                        (
+                            "delete",
+                            functools.partial(
+                                delete, self=self, form=form, form_uid=form_uid
+                            ),
+                        ),
+                    ):
+                        object.__setattr__(query, name, value)
 
-                    query.delete = functools.partial(
-                        delete, self=self, form=form, form_uid=form_uid
-                    )
-
-                    query.form = {"id": form_uid, **form}
+                    object.__setattr__(query, "form", {"id": form_uid, **form})
 
                     try:
                         return await button["_callback"](
@@ -1261,7 +1306,9 @@ class Events(Item):
             button = self._custom_map[query.data]
             if "handler" in button:
                 return await button["handler"](query)
-            query.edit = functools.partial(edit, self=self, query=query)
+            object.__setattr__(
+                query, "edit", functools.partial(edit, self=self, query=query)
+            )
             try:
                 await button["_callback"](
                     query,
@@ -1298,14 +1345,17 @@ class Events(Item):
 
                 call = InlineCall()
                 call.inline_message_id = chosen_inline_query.inline_message_id
-                call.answer = self._no_answer
-
-                call.edit = functools.partial(
-                    edit,
-                    self=self,
-                    query=chosen_inline_query,
-                    form=form,
-                    form_uid=form.get("uid"),
+                object.__setattr__(call, "answer", self._no_answer)
+                object.__setattr__(
+                    call,
+                    "edit",
+                    functools.partial(
+                        edit,
+                        self=self,
+                        query=chosen_inline_query,
+                        form=form,
+                        form_uid=form.get("uid"),
+                    ),
                 )
 
                 owner_name, method_name = button["handler"].split(".")
@@ -1773,12 +1823,12 @@ class Events(Item):
                 inline_message_id=call.inline_message_id,
                 text=form["strings"][page],
                 reply_markup=self._generate_markup(unit_id),
-                disable_web_page_preview=True,
+                link_preview_options={"is_disabled": True},
             )
             await call.answer()
-        except aiogram.utils.exceptions.RetryAfter as e:
+        except aiogram.exceptions.TelegramRetryAfter as e:
             await call.answer(
-                f"Got FloodWait. Wait for {e.timeout} seconds", show_alert=True
+                f"Got FloodWait. Wait for {e.retry_after} seconds", show_alert=True
             )
         except Exception:
             logger.exception("Exception while trying to edit list")

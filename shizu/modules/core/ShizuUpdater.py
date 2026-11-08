@@ -41,7 +41,7 @@ import logging
 import time
 
 import git
-from aiogram.types import CallbackQuery, InputFile
+from aiogram.types import CallbackQuery, FSInputFile
 from pyrogram import Client, enums, types
 
 from shizu import loader, utils
@@ -335,7 +335,7 @@ class UpdateMod(loader.Module):
 
             await self.bot.bot.send_photo(
                 self.me.id,
-                InputFile("assets/update.png"),
+                FSInputFile("assets/update.png"),
                 caption=text,
                 reply_markup=markup,
             )

@@ -13,6 +13,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import asyncio
 import logging
 
 from pyrogram.methods.utilities.idle import idle
@@ -26,7 +27,11 @@ from shizu.security import SafeMode
 async def main():
     """Main function"""
 
-    me, app, tapp = await auth.Auth().authorize()
+    try:
+        me, app, tapp = await auth.Auth().authorize()
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        logging.info("Shizu startup interrupted; shutting down.")
+        return True
 
     if auth.args.setup_only:
         if tapp is not None:

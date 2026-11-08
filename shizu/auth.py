@@ -51,8 +51,6 @@ else:
 
 Session.notice_displayed = True
 
-loop = asyncio.get_event_loop()
-
 
 def colored_input(prompt: str = "", hide: bool = False) -> str:
     frame = sys._getframe(1)
@@ -289,15 +287,26 @@ class Auth:
             ):
                 web.port = args.port or random.randint(2000, 9999)
 
-                await web.start(web.port)
+                try:
+                    await web.start(web.port)
 
-                logging.info(f"🌐 Web interface available at: {web.url}")
-                await Reporter.notify_owner_by_token(
-                    Reporter.SESSION_ENDED + Reporter.LOGIN_WEB.format(web.url),
-                    "session_notice",
-                )
+                    logging.info(f"🌐 Web interface available at: {web.url}")
+                    await Reporter.notify_owner_by_token(
+                        Reporter.SESSION_ENDED + Reporter.LOGIN_WEB.format(web.url),
+                        "session_notice",
+                    )
 
-                await web.wait_for_api_token_setup()
-                await web.wait_for_clients_setup()
+                    await web.wait_for_api_token_setup()
+                    await web.wait_for_clients_setup()
 
-                return utils.restart()
+                    return utils.restart()
+                except (asyncio.CancelledError, KeyboardInterrupt):
+                    logging.info("Web setup interrupted; stopping web and disconnecting...")
+                    try:
+                        await web.stop()
+                    except Exception:
+                        logging.exception("Could not stop the web interface cleanly")
+                    if self.app.is_connected:
+                        await self.app.disconnect()
+                    raise
+

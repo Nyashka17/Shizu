@@ -39,7 +39,7 @@ from urllib.parse import urlparse
 import git
 import grapheme
 import requests
-from aiogram.utils.exceptions import BotKicked, ChatNotFound
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from pyrogram import Client, enums, types
 from pyrogram.raw.types.input_message_entity_mention_name import (
     InputMessageEntityMentionName,
@@ -331,7 +331,7 @@ async def ensure_bot_in_chat(app: Client, chat) -> None:
     """Add the inline bot to a chat it was removed from or never joined"""
     try:
         await app.bot.get_chat(chat)
-    except (ChatNotFound, BotKicked):
+    except (TelegramBadRequest, TelegramForbiddenError):
         await invite_bot(app, chat)
 
 

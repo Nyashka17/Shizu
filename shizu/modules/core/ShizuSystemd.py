@@ -25,7 +25,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Optional
 
-from aiogram.types import InlineQueryResultArticle, InputTextMessageContent
+try:
+    from aiogram.types import InlineQueryResultArticle, InputTextMessageContent
+except ImportError:  # pragma: no cover - aiogram is optional
+    InlineQueryResultArticle = None  # type: ignore[assignment]
+    InputTextMessageContent = None  # type: ignore[assignment]
 from aiohttp import web
 from pyrogram import Client, types
 
@@ -654,11 +658,15 @@ class SystemdMod(loader.Module):
                     title="systemd",
                     description=self.strings("inline_desc"),
                     input_message_content=InputTextMessageContent(
-                        text, "HTML", disable_web_page_preview=True
+                        message_text=text,
+                        parse_mode="HTML",
+                        link_preview_options={"is_disabled": True},
                     ),
                     reply_markup=self.bot._generate_markup(uid, for_inline_query=True),
                 )
-            ],
+            ]
+            if InlineQueryResultArticle is not None
+            else [],
             cache_time=0,
         )
 

@@ -69,7 +69,12 @@ try:
     )
     logging.info(banner)
 
-    asyncio.run(main.main())
+    try:
+        asyncio.run(main.main())
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        logging.info("Shizu stopped by user.")
+        sys.exit(130)
+
 
 except ModuleNotFoundError as module:
     print(f"🚫 Missing dependency: {module}", file=sys.stderr)

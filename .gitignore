@@ -43,6 +43,8 @@ telethon_sessions.key
 /scripts/*
 !/scripts/install.py
 !/scripts/panel_demo.py
+!/scripts/shizu_installer.py
+!/scripts/installer/
 cloudflared-*
 /docs
 assets/branding-*

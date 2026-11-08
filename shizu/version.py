@@ -15,6 +15,19 @@
 
 __version__ = (1, 0, 5)
 
+try:  # auto-detect from pyproject.toml with fallback
+    import tomllib
+    from pathlib import Path
+
+    _pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    with _pyproject.open("rb") as _f:
+        _data = tomllib.load(_f)
+    _ver = _data.get("project", {}).get("version", "")
+    if _ver:
+        __version__ = tuple(int(x) for x in _ver.split(".") if x.isdigit())
+except Exception:  # pragma: no cover - keep hardcoded fallback
+    pass
+
 import os
 
 from git import Repo

@@ -19,6 +19,7 @@ import io
 import time
 from datetime import datetime
 
+from aiogram.types import BufferedInputFile
 from pyrogram import Client, enums, types
 
 from shizu import loader, utils
@@ -52,13 +53,14 @@ class BackupMod(loader.Module):
         )
 
     async def _send_backup(self, app: Client, caption_key: str = "backup") -> None:
-        txt = io.BytesIO(self.backups.encrypt(self.db, self.me.id))
-        txt.name = f"shizu-{datetime.now().strftime('%d-%m-%Y-%H-%M')}.shizu-backup"
+        data = self.backups.encrypt(self.db, self.me.id)
+        name = f"shizu-{datetime.now().strftime('%d-%m-%Y-%H-%M')}.shizu-backup"
+        document = BufferedInputFile(data, filename=name)
         chat = self.db.get("shizu.chat", "backup")
         await utils.ensure_bot_in_chat(app, chat)
         await app.inline_bot.send_document(
             chat,
-            document=txt,
+            document=document,
             caption=self.strings(caption_key).format(
                 datetime.now().strftime("%d-%m-%Y %H:%M")
             )

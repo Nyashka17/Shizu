@@ -21,7 +21,7 @@ import logging
 import time
 
 from aiogram.types import CallbackQuery
-from aiogram.utils.exceptions import BotBlocked, TelegramAPIError, UserDeactivated
+from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
 
 from shizu import loader, utils
 
@@ -198,7 +198,7 @@ class ShizuFeedback(loader.Module):
         try:
             copied = await message.copy_to(target)
             self._remember("replies", message.message_id, [target, copied.message_id])
-        except (BotBlocked, UserDeactivated):
+        except (TelegramForbiddenError):
             await message.reply(self.strings("blocked"))
         except TelegramAPIError as error:
             await message.reply(
@@ -220,7 +220,7 @@ class ShizuFeedback(loader.Module):
             try:
                 await source.copy_to(int(user_id))
                 sent += 1
-            except (BotBlocked, UserDeactivated):
+            except (TelegramForbiddenError):
                 gone.add(user_id)
             except TelegramAPIError:
                 logging.exception("Broadcast to %s failed", user_id)

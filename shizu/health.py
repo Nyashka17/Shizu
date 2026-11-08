@@ -20,6 +20,8 @@ import time
 from collections import defaultdict, deque
 
 from aiogram import Bot
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 
 from shizu import database, utils
 from shizu.security import SecretRedactor
@@ -122,7 +124,7 @@ class Reporter:
         if not self.bot or not chat:
             return False
         await self.bot.send_message(
-            chat, text, parse_mode="html", disable_web_page_preview=True
+            chat, text, parse_mode="html", link_preview_options={"is_disabled": True}
         )
         return True
 
@@ -130,7 +132,9 @@ class Reporter:
         if not self.app:
             return False
         destination = "me" if utils.is_system_chat(chat) else chat or "me"
-        await self.app.send_message(destination, text, disable_web_page_preview=True)
+        await self.app.send_message(
+            destination, text, link_preview_options={"is_disabled": True}
+        )
         return True
 
     @classmethod
@@ -144,17 +148,17 @@ class Reporter:
         if time.time() - database.db.get("shizu.health", key, 0) < cls.MUTE:
             return False
         database.db.set("shizu.health", key, time.time())
-        bot = Bot(token=token)
+        bot = Bot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         try:
             await bot.send_message(
-                owner, text, parse_mode="html", disable_web_page_preview=True
+                owner, text, parse_mode="html", link_preview_options={"is_disabled": True}
             )
             return True
         except Exception:
             logger.warning("Could not notify the owner through the bot", exc_info=True)
             return False
         finally:
-            await (await bot.get_session()).close()
+            await bot.session.close()
 
 
 reporter = Reporter()

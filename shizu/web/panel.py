@@ -93,7 +93,7 @@ class DashboardServer(TunnelManager):
         )
         options = {
             "parse_mode": "HTML",
-            "disable_web_page_preview": True,
+            "link_preview_options": {"is_disabled": True},
             "reply_markup": reply_markup,
         }
         if message_id is not None:
@@ -241,8 +241,14 @@ class DashboardServer(TunnelManager):
         text = self.module.strings("web_link").format(html.escape(invitation))
         markup = None
         if self.url.startswith("https://"):
-            markup = InlineKeyboardMarkup().add(
-                InlineKeyboardButton(self.module.strings("btn_web"), url=invitation)
+            markup = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=self.module.strings("btn_web"), url=invitation
+                        )
+                    ]
+                ]
             )
         else:
             text += "\n\n" + self.module.strings("web_local")
@@ -382,15 +388,19 @@ class DashboardServer(TunnelManager):
         if pending is None:
             raise PanelError("invite_expired", 403)
         token, item = pending
-        markup = InlineKeyboardMarkup().row(
-            InlineKeyboardButton(
-                self.module.strings("web_allow"),
-                callback_data=f"{self.CALLBACK_PREFIX}{item['id']}:allow",
-            ),
-            InlineKeyboardButton(
-                self.module.strings("web_deny"),
-                callback_data=f"{self.CALLBACK_PREFIX}{item['id']}:deny",
-            ),
+        markup = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=self.module.strings("web_allow"),
+                        callback_data=f"{self.CALLBACK_PREFIX}{item['id']}:allow",
+                    ),
+                    InlineKeyboardButton(
+                        text=self.module.strings("web_deny"),
+                        callback_data=f"{self.CALLBACK_PREFIX}{item['id']}:deny",
+                    ),
+                ]
+            ]
         )
         try:
             await self.module.bot.bot.send_message(
@@ -431,11 +441,15 @@ class DashboardServer(TunnelManager):
             path="/",
         )
         response.del_cookie(PanelAuth.PENDING_COOKIE, path="/")
-        markup = InlineKeyboardMarkup().add(
-            InlineKeyboardButton(
-                self.module.strings("web_revoke"),
-                callback_data=f"{self.CALLBACK_PREFIX}{session['id']}:revoke",
-            )
+        markup = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=self.module.strings("web_revoke"),
+                        callback_data=f"{self.CALLBACK_PREFIX}{session['id']}:revoke",
+                    )
+                ]
+            ]
         )
         await self.notify(
             "web_login_notice",

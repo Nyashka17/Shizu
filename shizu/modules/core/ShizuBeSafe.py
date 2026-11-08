@@ -28,7 +28,7 @@ import re
 import time
 from urllib.parse import urlparse
 
-from aiogram.types import CallbackQuery, InputFile
+from aiogram.types import CallbackQuery, BufferedInputFile
 from pyrogram import Client, types
 
 from shizu import loader, utils
@@ -419,7 +419,7 @@ class BeSafe(loader.Module):
         await call.answer()
         await self.bot.bot.send_document(
             call.message.chat.id,
-            InputFile(io.BytesIO(data.encode()), filename=filename),
+            BufferedInputFile(data.encode(), filename=filename),
             reply_to_message_id=call.message.message_id,
         )
 

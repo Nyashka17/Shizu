@@ -19,6 +19,8 @@ import sys
 from typing import NoReturn
 
 from aiogram import Bot, Dispatcher, exceptions
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 from pyrogram import Client
 
 from shizu import database, types, utils
@@ -27,8 +29,8 @@ from shizu.bot.token_manager import TokenManager
 from shizu.health import reporter
 
 with contextlib.suppress(Exception):
-    bot = Bot(token=database.db.get("shizu.bot", "token", None), parse_mode="html")
-    dp = Dispatcher(bot)
+    bot = Bot(token=database.db.get("shizu.bot", "token", None), default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    dp = Dispatcher()
 
 
 class BotManager(Events, TokenManager):
@@ -73,9 +75,9 @@ class BotManager(Events, TokenManager):
             self._db.set("shizu.bot", "token", self._token)
 
         try:
-            self.bot = Bot(self._token, parse_mode="html")
+            self.bot = Bot(self._token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
             me = await self.bot.get_me()
-        except (exceptions.ValidationError, exceptions.Unauthorized):
+        except exceptions.TelegramUnauthorizedError:
             if self._db.get("shizu.bot", "manual_token", False):
                 logging.error(
                     "The supplied bot token is invalid. Update shizu.bot.token in db.json and restart Shizu."
@@ -87,9 +89,8 @@ class BotManager(Events, TokenManager):
                     ),
                     prefer_userbot=True,
                 )
-                session = await self.bot.get_session()
-                await session.close()
-                return sys.exit(1)
+            await self.bot.session.close()
+            return sys.exit(1)
             logging.error("Invalid token. Trying to recreate it")
 
             self._token = None
@@ -100,22 +101,22 @@ class BotManager(Events, TokenManager):
         self.bot_id = me.id
         self._db.set("shizu.bot", "username", me.username)
 
-        self._dp = Dispatcher(self.bot)
-        self._dp.register_message_handler(
-            self._message_handler, lambda _: True, content_types=["any"]
+        self._dp = Dispatcher()
+        self._dp.message.register(
+            self._message_handler, lambda _: True
         )
-        self._dp.register_edited_message_handler(
-            self._edited_message_handler, lambda _: True, content_types=["any"]
+        self._dp.edited_message.register(
+            self._edited_message_handler, lambda _: True
         )
-        self._dp.register_chosen_inline_handler(
+        self._dp.chosen_inline_result.register(
             self._chosen_inline_handler, lambda chosen_inline_query: True
         )
-        self._dp.register_inline_handler(self._inline_handler, lambda _: True)
-        self._dp.register_callback_query_handler(
+        self._dp.inline_query.register(self._inline_handler, lambda _: True)
+        self._dp.callback_query.register(
             self._callback_query_handler, lambda _: True
         )
 
-        utils.spawn(self._dp.start_polling())
+        utils.spawn(self._dp.start_polling(self.bot))
 
         self.bot.manager = self
         self.init_complete = True

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run from a checkout: bash install.sh
+# Run from a checkout: bash install.sh [--help]
 set -Eeuo pipefail
 umask 077
 
@@ -16,39 +16,50 @@ case "$(uname -s)" in
     Linux|Darwin) ;;
     *) die 'Only Linux and macOS are supported.' ;;
 esac
-if [[ "${1:-}" == --help || "${1:-}" == -h ]]; then
-    echo 'Usage: bash install.sh [--no-start]'
-    echo
-    echo 'Installs Python and dependencies, logs in to Telegram'
-    echo 'and on Linux offers to run Shizu as a systemd service.'
-    echo
-    echo '  --no-start   only install dependencies, skip login and systemd'
-    exit 0
-fi
-[[ $# -eq 0 || ( $# -eq 1 && "$1" == --no-start ) ]] || die 'Unknown argument. See bash install.sh --help.'
-command -v git >/dev/null || die 'git is required. Install it and run the installer again.'
-if [[ $EUID -eq 0 ]]; then
-    printf '%sWarning:%s running as root. Shizu files and the service will belong to root.\n' "$AMBER" "$RESET"
-    printf '%sRun the installer as your normal user unless this is intended.%s\n' "$DIM" "$RESET"
-fi
 
 SHIZU_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 cd "$SHIZU_ROOT"
-SHIZU_PYTHON_VERSION="$(tr -d '[:space:]' < .python-version)"
-[[ "$SHIZU_PYTHON_VERSION" =~ ^3\.(10|11)(\.[0-9]+)?$ ]] || die '.python-version must contain Python 3.10 or 3.11, optionally with a patch version.'
 
-printf '%s静 Shizu installer%s %s(%s)%s\n' "$BOLD" "$RESET" "$DIM" "$SHIZU_ROOT" "$RESET"
+if [[ "${1:-}" == --help || "${1:-}" == -h ]]; then
+    cat <<EOF
+Usage: bash install.sh [OPTIONS]
 
-if command -v uv >/dev/null; then
+One-command installer for Shizu. Installs Python 3.11-3.14, creates a venv,
+installs dependencies, optionally sets up a systemd service, then runs the
+Telegram login setup (scripts/install.py).
+
+Common options:
+  --auto                  best available tested Python version
+  --python 3.X|auto       explicit Python version
+  --rebuild --python X    safely rebuild the venv on version X
+  --no-start              stop after dependencies (skip login/start)
+  --start                 install and start (default)
+  --no-web                terminal setup instead of web setup
+  --recreate              remove old venv/installer and install fresh
+  --root                  allow privileged install actions
+  --skip-systemd          do not install systemd unit
+  --service-user NAME     run service as existing user
+  --create-user NAME      create a new system user for the service
+  --yes / -y              answer yes to all prompts
+  --dry-run               print actions without executing
+  --non-interactive       no prompts at all
+EOF
+    exit 0
+fi
+
+command -v git >/dev/null || die 'git is required. Install it and run the installer again.'
+[[ $EUID -eq 0 ]] && { printf '%sWarning:%s running as root. The service will still run non-root by default.\n' "$AMBER" "$RESET" >&2; }
+
+if command -v uv >/dev/null 2>&1; then
     SHIZU_UV="$(command -v uv)"
 elif [[ -x "$SHIZU_ROOT/.installer/bin/uv" ]]; then
     SHIZU_UV="$SHIZU_ROOT/.installer/bin/uv"
 else
     step 'Downloading uv'
     mkdir -p .installer/bin
-    if command -v curl >/dev/null; then
+    if command -v curl >/dev/null 2>&1; then
         curl --fail --location --silent --show-error https://astral.sh/uv/install.sh -o .installer/uv-install.sh
-    elif command -v wget >/dev/null; then
+    elif command -v wget >/dev/null 2>&1; then
         wget -q https://astral.sh/uv/install.sh -O .installer/uv-install.sh
     else
         die 'curl or wget is required to download uv.'
@@ -56,22 +67,9 @@ else
     UV_UNMANAGED_INSTALL="$SHIZU_ROOT/.installer/bin" sh .installer/uv-install.sh
     SHIZU_UV="$SHIZU_ROOT/.installer/bin/uv"
 fi
-# Keep managed interpreters local; do not replace system Python or the old venv.
+
+# Keep managed interpreters and cache local to the project; never touch system Python.
 export UV_PYTHON_INSTALL_DIR="$SHIZU_ROOT/.installer/python"
 export UV_CACHE_DIR="$SHIZU_ROOT/.installer/cache"
 
-if [[ -e .venv ]]; then
-    if ! .venv/bin/python -c 'import sys; requested = tuple(map(int, sys.argv[1].split("."))); sys.exit(sys.version_info[:len(requested)] != requested)' "$SHIZU_PYTHON_VERSION"; then
-        die ".venv uses another Python version or is broken. Rename it (mv .venv .venv.old) and run the installer again."
-    fi
-    step "Using existing Python environment matching ${SHIZU_PYTHON_VERSION}"
-else
-    step "Installing Python ${SHIZU_PYTHON_VERSION}"
-    "$SHIZU_UV" python install --no-bin "$SHIZU_PYTHON_VERSION"
-    "$SHIZU_UV" venv --managed-python --python "$SHIZU_PYTHON_VERSION" --seed .venv
-fi
-
-step 'Installing Shizu and dependencies'
-"$SHIZU_UV" pip install --python "$SHIZU_ROOT/.venv/bin/python" --editable "$SHIZU_ROOT"
-"$SHIZU_UV" pip check --python "$SHIZU_ROOT/.venv/bin/python"
-exec "$SHIZU_ROOT/.venv/bin/python" "$SHIZU_ROOT/scripts/install.py" "$@"
+exec python3 "$SHIZU_ROOT/scripts/shizu_installer.py" "$@"

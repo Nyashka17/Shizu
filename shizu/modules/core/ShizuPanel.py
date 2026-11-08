@@ -22,7 +22,7 @@ import sys
 import time
 
 from aiogram.types import CallbackQuery
-from aiogram.utils.exceptions import BadRequest
+from aiogram.exceptions import TelegramBadRequest
 from pyrogram import Client, types
 
 from shizu import loader, utils
@@ -63,7 +63,7 @@ class ShizuPanel(loader.Module):
                 disable_web_page_preview=True,
                 reply_markup=reply_markup,
             )
-        except BadRequest as error:
+        except TelegramBadRequest as error:
             if not any(
                 reason in str(error).lower()
                 for reason in ("custom emoji", "custom_emoji", "premium")
