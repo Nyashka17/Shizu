@@ -92,7 +92,7 @@ class Strings:
         self._mod = mod
         self._translator = translator
         self._db = db
-        self._base_strings = mod.strings
+        self._base_strings = getattr(mod, "strings", None) or {}
 
     def __getitem__(self, key: str) -> str:
         module_key = f"{self._mod.__module__}.{key}"
