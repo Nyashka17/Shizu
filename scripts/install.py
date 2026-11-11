@@ -99,8 +99,8 @@ RestrictSUIDSGID=yes
 RestrictNamespaces=yes
 LockPersonality=yes
 ReadOnlyPaths={readonly}
-ReadOnlyPaths={unit_quote("-" + str(ROOT / ".installer"))} {unit_quote("-" + str(ROOT / ".git"))}
-ReadWritePaths={unit_quote(ROOT / "shizu/modules")}
+ReadOnlyPaths={unit_quote("-" + str(ROOT / ".installer"))}
+ReadWritePaths={unit_quote(ROOT / ".git")} {unit_quote(ROOT / "shizu/modules")}
 ReadOnlyPaths={unit_quote(ROOT / "shizu/modules/core")}
 
 [Install]

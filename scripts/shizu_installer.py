@@ -288,8 +288,8 @@ RestrictSUIDSGID=yes
 RestrictNamespaces=yes
 LockPersonality=yes
 ReadOnlyPaths={readonly}
-ReadOnlyPaths="{ROOT / '.installer'}" "{ROOT / '.git'}"
-ReadWritePaths="{ROOT / 'shizu' / 'modules'}"
+ReadOnlyPaths="{ROOT / '.installer'}"
+ReadWritePaths="{ROOT / '.git'}" "{ROOT / 'shizu' / 'modules'}"
 ReadOnlyPaths="{ROOT / 'shizu' / 'modules' / 'core'}"
 
 [Install]
