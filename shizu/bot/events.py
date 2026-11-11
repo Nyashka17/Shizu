@@ -71,6 +71,10 @@ from shizu import logger as lo
 from shizu.bot.types import Item
 from shizu.security import EVERYONE, mask_of
 from shizu.telegram.rich import as_dict, needs_bot, send_rich
+from shizu.telegram.widgets import (
+    AnswerWidgetQuery,
+    SendWidget,
+)
 from shizu.translator import Translator
 
 logger = logging.getLogger(__name__)
@@ -389,6 +393,48 @@ class Events(Item):
         elif markup and isinstance(markup[0], dict):
             markup = [markup]
         return self._generate_markup(markup or [])
+
+    async def send_widget(
+        self,
+        chat_id: int | str,
+        html: str,
+        *,
+        width: int | None = None,
+        height: int | None = None,
+        public_data: str | None = None,
+        chat_data: str | None = None,
+        caption: str | None = None,
+        parse_mode: str | None = None,
+        show_caption_above_media: bool | None = None,
+        allow_queries: bool | None = None,
+        is_shared: bool | None = None,
+        disable_notification: bool | None = None,
+        protect_content: bool | None = None,
+        message_thread_id: int | None = None,
+        reply_parameters: Any = None,
+        reply_markup: Any = None,
+    ) -> Message:
+        """Send a message with an HTML widget (Bot API 10.4)."""
+        return await self.bot(
+            SendWidget(
+                chat_id=chat_id,
+                html=html,
+                width=width,
+                height=height,
+                public_data=public_data,
+                chat_data=chat_data,
+                caption=caption,
+                parse_mode=parse_mode,
+                show_caption_above_media=show_caption_above_media,
+                allow_queries=allow_queries,
+                is_shared=is_shared,
+                disable_notification=disable_notification,
+                protect_content=protect_content,
+                message_thread_id=message_thread_id,
+                reply_parameters=reply_parameters,
+                reply_markup=reply_markup,
+            )
+        )
 
     async def _message_handler(self, message: Message) -> Message:
         if utils.is_system_chat(message.chat.id, self._db):
@@ -1329,6 +1375,60 @@ class Events(Item):
                 await query.answer(
                     self._tr("button_expired", "⌛️ This button has expired")
                 )
+
+    async def _widget_query_handler(self, query) -> None:
+        """Widget query handler (interactions from HTML widgets)"""
+        for mod in self._all_modules.modules:
+            if (
+                not hasattr(mod, "widget_query_handlers")
+                or not isinstance(mod.widget_query_handlers, dict)
+                or not mod.widget_query_handlers
+            ):
+                continue
+
+            for query_func in mod.widget_query_handlers.values():
+                try:
+                    await query_func(query)
+                except Exception:
+                    logger.exception("Error on running widget query watcher!")
+                    with contextlib.suppress(Exception):
+                        await self.bot(
+                            aiogram.methods.AnswerWidgetQuery(
+                                widget_query_id=query.id,
+                                notification_text="An error occurred while processing the request.",
+                            )
+                        )
+                return
+
+    async def _widget_query_middleware(self, handler, event, data):
+        """Middleware to intercept widget_query updates before they reach aiogram's event router."""
+        if event is None:
+            return await handler(event, data)
+
+        widget_query = None
+        if hasattr(event, "model_extra"):
+            widget_query = event.model_extra.get("widget_query")
+        if widget_query is None:
+            widget_query = getattr(event, "widget_query", None)
+
+        if widget_query is not None:
+            from shizu.telegram.widgets import WidgetQuery as _WQ
+            from aiogram.dispatcher.event.bases import UNHANDLED
+
+            query = _WQ(
+                id=widget_query.get("id", ""),
+                user=widget_query.get("user"),
+                widget_id=widget_query.get("widget_id"),
+                chat_data=widget_query.get("chat_data"),
+                public_data=widget_query.get("public_data"),
+                query_data=widget_query.get("query_data"),
+            )
+            query._bot = self.bot
+            query._event = event
+            await self._widget_query_handler(query)
+            return UNHANDLED
+
+        return await handler(event, data)
 
     async def _chosen_inline_handler(
         self, chosen_inline_query: aiogram.types.ChosenInlineResult

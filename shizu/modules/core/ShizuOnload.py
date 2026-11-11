@@ -20,7 +20,7 @@ import logging
 import re
 import time
 
-from aiogram.types import CallbackQuery, FSInputFile
+from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.exceptions import TelegramBadRequest, TelegramUnauthorizedError
 from pyrogram import Client, enums
 from pyrogram.errors import (
@@ -185,6 +185,80 @@ class ShizuOnload(loader.Module):
                 reply_markup=markup,
                 disable_web_page_preview=True,
             )
+
+            # Send an HTML widget after the welcome message
+            widget_html = """<div widget="true" style="height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; overflow: hidden; position: relative; background-color: #0a0a0a; color: #e5e5e5; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;">
+  <div style="position: absolute; inset: 0; background-image: linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px); background-size: 60px 60px; pointer-events: none;"></div>
+  <div style="position: absolute; width: 600px; height: 600px; background: radial-gradient(circle, rgba(255,255,255,0.03) 0%, transparent 70%); top: 50%; left: 50%; transform: translate(-50%, -50%); pointer-events: none;"></div>
+  <div style="text-align: center; z-index: 1; padding: 0 24px; max-width: 600px; width: 100%;">
+    <div style="width: 48px; height: 48px; border: 1px solid rgba(255,255,255,0.15); border-radius: 12px; margin: 0 auto 40px; display: flex; align-items: center; justify-content: center;">
+      <div style="width: 12px; height: 12px; background: #fff; border-radius: 3px;"></div>
+    </div>
+    <h1 style="font-size: clamp(1.5rem, 4vw, 2.5rem); font-weight: 300; color: #e5e5e5; margin: 0 0 20px; letter-spacing: -0.02em; line-height: 1.2;">Скоро здесь <strong style="font-weight: 500; color: #fff;">что-то будет</strong></h1>
+    <p style="font-size: clamp(0.875rem, 2vw, 1rem); color: rgba(255,255,255,0.35); font-weight: 400; line-height: 1.6; margin: 0 0 48px;">Что-то должно быть<br>А возможно тут ничего не будет.</p>
+    <div style="width: 40px; height: 1px; background: rgba(255,255,255,0.1); margin: 0 auto 48px;"></div>
+    <button onclick="sendQuery('hello')" style="display: inline-flex; align-items: center; gap: 10px; font-size: 0.8125rem; color: rgba(255,255,255,0.3); letter-spacing: 0.05em; text-transform: uppercase; background: none; border: none; cursor: pointer; padding: 0;">
+      <span style="width: 6px; height: 6px; background: #4ade80; border-radius: 50%;"></span>
+      Нажми меня
+    </button>
+    <p id="result" style="margin: 16px 0 0; font-size: 0.75rem; color: rgba(255,255,255,0.15); letter-spacing: 0.02em;"></p>
+  </div>
+  <div style="position: absolute; bottom: 32px; font-size: 0.75rem; color: rgba(255,255,255,0.15); letter-spacing: 0.02em;">© 2026 - by Dream</div>
+</div>
+<script>
+function sendQuery(data) {
+  const result = document.getElementById('result');
+  result.textContent = 'Sending...';
+  Telegram.WebApp.sendWidgetQuery(
+    { type: 'query', data: data },
+    function(response) {
+      result.textContent = 'Response: ' + JSON.stringify(response);
+    }
+  );
+}
+</script>"""
+            try:
+                from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+                markup = InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="🐈‍⬛ Source",
+                                url="https://github.com/ibeswipin/Shizu",
+                            ),
+                            InlineKeyboardButton(
+                                text="🪭 Chief Developer",
+                                url="https://t.me/hikamoru",
+                            ),
+                        ],
+                        [
+                            InlineKeyboardButton(
+                                text="👥 Support",
+                                url="https://t.me/shizu_talks",
+                            ),
+                        ],
+                    ]
+                )
+                await self.bot.send_widget(
+                    chat_id=message.chat.id,
+                    html=widget_html,
+                    allow_queries=True,
+                    caption="Скоро здесь что-то будет",
+                    reply_markup=markup,
+                )
+            except Exception as e:
+                logging.exception("Failed to send widget on /start: %s", e)
+
+    async def demo_widget_query_handler(self, query):
+        """Answer queries from the widget sent on /start."""
+        data = query.query_data or ""
+        if data == "hello":
+            await query.answer(
+                notification_text="Привет от Shizu! 🐙 Виджет работает через Bot API 10.4",
+            )
+        else:
+            await query.answer(notification_text="Unknown query")
 
     DEAD_SESSION = (
         AuthKeyUnregistered,

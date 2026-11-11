@@ -58,6 +58,7 @@ class ModulesManager:
         self.message_handlers: dict[str, FunctionType] = {}
         self.inline_handlers: dict[str, FunctionType] = {}
         self.callback_handlers: dict[str, FunctionType] = {}
+        self.widget_query_handlers: dict[str, FunctionType] = {}
 
         self._local_modules_path: str = str(CUSTOM_MODULES_PATH)
 

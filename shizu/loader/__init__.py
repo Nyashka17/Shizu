@@ -92,6 +92,7 @@ from shizu.loader.handlers import get_inline_handlers as get_inline_handlers
 from shizu.loader.handlers import get_message_handlers as get_message_handlers
 from shizu.loader.handlers import get_raw_handlers as get_raw_handlers
 from shizu.loader.handlers import get_watcher_handlers as get_watcher_handlers
+from shizu.loader.handlers import get_widget_query_handlers as get_widget_query_handlers
 from shizu.loader.lifecycle import _hook_args as _hook_args
 from shizu.loader.lifecycle import iter_attrs as iter_attrs
 from shizu.loader.manager import ModulesManager as ModulesManager
@@ -159,6 +160,7 @@ _decorated.__module__ = __name__
 get_callback_handlers.__module__ = __name__
 get_inline_handlers.__module__ = __name__
 get_raw_handlers.__module__ = __name__
+get_widget_query_handlers.__module__ = __name__
 _hook_args.__module__ = __name__
 iter_attrs.__module__ = __name__
 

@@ -115,6 +115,7 @@ class BotManager(Events, TokenManager):
         self._dp.callback_query.register(
             self._callback_query_handler, lambda _: True
         )
+        self._dp.update.outer_middleware(self._widget_query_middleware)
 
         utils.spawn(self._dp.start_polling(self.bot))
 

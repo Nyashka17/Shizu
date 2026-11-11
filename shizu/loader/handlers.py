@@ -134,6 +134,18 @@ def get_raw_handlers(instance: Module) -> list[FunctionType]:
     ]
 
 
+def get_widget_query_handlers(instance: Module) -> dict[str, FunctionType]:
+    """Returns a dictionary of widget query handler functions"""
+    return {
+        method_name[:-len("_widget_query_handler")].lower(): getattr(instance, method_name)
+        for method_name in dir(instance)
+        if (
+            callable(getattr(instance, method_name))
+            and method_name.endswith("_widget_query_handler")
+        )
+    }
+
+
 class HandlerRegistry:
     """Collect handlers and keep the manager registries in sync with module lifetime."""
 
@@ -147,6 +159,7 @@ class HandlerRegistry:
         instance.message_handlers = loader.get_message_handlers(instance)
         instance.callback_handlers = loader.get_callback_handlers(instance)
         instance.inline_handlers = loader.get_inline_handlers(instance)
+        instance.widget_query_handlers = loader.get_widget_query_handlers(instance)
 
     def register(self, instance):
         manager = self.manager
@@ -161,6 +174,7 @@ class HandlerRegistry:
             manager.message_handlers.update(instance.message_handlers)
             manager.callback_handlers.update(instance.callback_handlers)
             manager.inline_handlers.update(instance.inline_handlers)
+            manager.widget_query_handlers.update(instance.widget_query_handlers)
         else:
             manager.command_handlers.update(instance.command_handlers)
 

@@ -13,5 +13,16 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 """Separate, encrypted Telethon authorizations approved by Pyrogram."""
+
+from shizu.telegram.widgets import (
+    AnswerWidgetQuery,
+    SendWidget,
+    WidgetQuery,
+)
+
+__all__ = [
+    "AnswerWidgetQuery",
+    "SendWidget",
+    "WidgetQuery",
+]
