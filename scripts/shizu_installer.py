@@ -371,8 +371,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--yes", "-y", action="store_true", help="answer yes to all prompts")
     p.add_argument("--dry-run", action="store_true", help="print actions without executing")
     p.add_argument("--skip-systemd", action="store_true", help="do not install systemd unit")
-    p.add_argument("--systemd", action="store_true", help="install systemd unit (default on Linux)")
-    p.add_argument("--non-interactive", action="store_true", help="no prompts at all")
+    p.add_argument("--systemd-mode", choices=["system", "user", "manual", "skip"], help="systemd mode")
+    p.add_argument("--service-user-mode", choices=["root", "current", "create"], help="service user mode")
+    p.add_argument("--interface-mode", choices=["web", "terminal"], help="interface mode")
     return p.parse_args()
 
 
@@ -434,16 +435,18 @@ def main() -> int:
     if do_start:
         log("Stage 1 complete. Starting Telegram login setup (stage 2)...")
         stage2_args = [str(INSTALL_PY)]
-        if args.no_web:
+        if args.no_web or args.interface_mode == "terminal":
             stage2_args.append("--no-web")
-        if args.root:
+        if args.root or args.service_user_mode == "root":
             stage2_args.append("--root")
         if args.service_user:
             stage2_args.extend(["--service-user", args.service_user])
         if args.create_user:
             stage2_args.extend(["--create-user", args.create_user])
-        if args.skip_systemd:
+        if args.skip_systemd or args.systemd_mode in ("manual", "skip"):
             stage2_args.append("--skip-systemd")
+        if args.systemd_mode == "user":
+            stage2_args.extend(["--systemd-mode", "user"])
         os.execv(venv_py, [venv_py] + stage2_args)
 
     log("Stage 1 complete (--no-start). Dependencies installed. Run: bash start.sh")

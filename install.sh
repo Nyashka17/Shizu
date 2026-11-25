@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
-# Shizu installer — auto-detects paths, creates dedicated user, supports --root
-# Usage: bash install.sh [OPTIONS]
+# Shizu Installer — Step-by-step interactive setup
 set -Eeuo pipefail
 umask 077
 
+# Colors
 if [[ -t 1 ]]; then
-    BOLD=$'\e[1m' AMBER=$'\e[38;5;214m' RED=$'\e[31m' DIM=$'\e[2m' RESET=$'\e[0m'
+    BOLD=$'\e[1m' AMBER=$'\e[38;5;214m' RED=$'\e[31m' GREEN=$'\e[32m' CYAN=$'\e[36m' DIM=$'\e[2m' RESET=$'\e[0m'
 else
-    BOLD='' AMBER='' RED='' DIM='' RESET=''
+    BOLD='' AMBER='' RED='' GREEN='' CYAN='' DIM='' RESET=''
 fi
 
 step() { printf '\n%s==>%s %s%s%s\n' "$AMBER" "$RESET" "$BOLD" "$1" "$RESET"; }
+info() { printf '%s%s%s\n' "$CYAN" "$1" "$RESET"; }
+ok() { printf '%s✓%s %s\n' "$GREEN" "$RESET" "$1"; }
 die() { printf '%sError:%s %s\n' "$RED" "$RESET" "$1" >&2; exit 1; }
+warn() { printf '%sWarning:%s %s\n' "$AMBER" "$RESET" "$1" >&2; }
+
 trap 'printf "\n%sInstallation failed at line %s.%s Fix the error above and run bash install.sh again.\n" "$RED" "$LINENO" "$RESET" >&2' ERR
 
 case "$(uname -s)" in
@@ -19,140 +23,369 @@ case "$(uname -s)" in
     *) die 'Only Linux and macOS are supported.' ;;
 esac
 
-# Auto-detect project root from script location
+# Auto-detect project root
 SHIZU_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 cd "$SHIZU_ROOT"
 
+# Handle --help early
 if [[ "${1:-}" == --help || "${1:-}" == -h ]]; then
     cat <<EOF
 Usage: bash install.sh [OPTIONS]
 
-One-command installer for Shizu. Auto-detects project paths, creates
-a dedicated system user, installs Python/venv/deps, sets up systemd.
+Step-by-step interactive installer for Shizu.
 
 Options:
-  --auto                  best available tested Python version
-  --python 3.X|auto       explicit Python version
-  --rebuild --python X    safely rebuild the venv on version X
-  --no-start              stop after dependencies (skip login/start)
-  --start                 install and start (default)
-  --no-web                terminal setup instead of web setup
-  --recreate              remove old venv/installer and install fresh
-  --root                  allow running Shizu service as root (not recommended)
-  --service-user NAME     run service as existing system user
-  --create-user NAME      create new system user (default: shizu)
-  --yes / -y              answer yes to all prompts
-  --dry-run               print actions without executing
-  --skip-systemd          do not install systemd unit
-  --non-interactive       no prompts at all
+  --help, -h     Show this help
+  --reinstall    Reinstall without resetting Telegram session
+  --remove       Fully remove everything
+  --run          Just run Shizu
+  --update       Check for GitHub updates (current branch)
 
-Examples:
-  bash install.sh                     # interactive, creates 'shizu' user
-  bash install.sh --auto --yes        # fully automatic
-  bash install.sh --create-user bot   # create user 'bot'
-  bash install.sh --root              # allow root (not recommended)
+Without options: runs interactive step-by-step installer.
 EOF
     exit 0
 fi
 
-command -v git >/dev/null || die 'git is required. Install it and run the installer again.'
+# State file for tracking installation progress
+STATE_FILE="$SHIZU_ROOT/.installer/state.json"
+mkdir -p "$SHIZU_ROOT/.installer"
 
-# Detect if we're root
-IS_ROOT=0
-if [[ $EUID -eq 0 ]]; then
-    IS_ROOT=1
-    printf '%sWarning:%s running as root. ' "$AMBER" "$RESET" >&2
-fi
+# Handle command-line options
+case "${1:-}" in
+    --reinstall) REINSTALL=1; shift ;;
+    --remove) FULL_REMOVE=1; shift ;;
+    --run) SKIP_INSTALL=1; shift ;;
+    --update) CHECK_UPDATE=1; shift ;;
+esac
 
-# Parse args to pass to Python installer
-ARGS=()
-CREATE_USER="shizu"
-SERVICE_USER=""
-ALLOW_ROOT=0
-SKIP_SYSTEMD=0
+# Load previous state
+load_state() {
+    if [[ -f "$STATE_FILE" ]]; then
+        python3 -c "
+import json, sys
+try:
+    with open('$STATE_FILE') as f:
+        data = json.load(f)
+    for k, v in data.items():
+        print(f'{k}={v}')
+except:
+    pass
+"
+    fi
+}
 
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --root) ALLOW_ROOT=1; ARGS+=("$1"); shift ;;
-        --create-user) CREATE_USER="$2"; ARGS+=("--create-user" "$2"); shift 2 ;;
-        --service-user) SERVICE_USER="$2"; ARGS+=("--service-user" "$2"); shift 2 ;;
-        --skip-systemd) SKIP_SYSTEMD=1; ARGS+=("$1"); shift ;;
-        --yes|-y) ARGS+=("--yes"); shift ;;
-        --dry-run) ARGS+=("--dry-run"); shift ;;
-        --non-interactive) ARGS+=("--non-interactive"); shift ;;
-        --recreate) ARGS+=("$1"); shift ;;
-        --auto) ARGS+=("$1"); shift ;;
-        --python) ARGS+=("$1" "$2"); shift 2 ;;
-        --rebuild) ARGS+=("$1"); shift ;;
-        --no-start) ARGS+=("$1"); shift ;;
-        --start) ARGS+=("$1"); shift ;;
-        --no-web) ARGS+=("$1"); shift ;;
-        *) ARGS+=("$1"); shift ;;
-    esac
-done
+save_state() {
+    python3 -c "
+import json, sys, os
+data = {}
+if os.path.exists('$STATE_FILE'):
+    try:
+        with open('$STATE_FILE') as f:
+            data = json.load(f)
+    except:
+        pass
+data.update($1)
+with open('$STATE_FILE', 'w') as f:
+    json.dump(data, f, indent=2)
+"
+}
 
-# Bootstrap uv if needed
-if command -v uv >/dev/null 2>&1; then
-    SHIZU_UV="$(command -v uv)"
-elif [[ -x "$SHIZU_ROOT/.installer/bin/uv" ]]; then
-    SHIZU_UV="$SHIZU_ROOT/.installer/bin/uv"
-else
-    step 'Downloading uv'
-    mkdir -p .installer/bin
-    if command -v curl >/dev/null 2>&1; then
-        curl --fail --location --silent --show-error https://astral.sh/uv/install.sh -o .installer/uv-install.sh
-    elif command -v wget >/dev/null 2>&1; then
-        wget -q https://astral.sh/uv/install.sh -O .installer/uv-install.sh
+# Check if already installed
+check_existing() {
+    local state
+    state=$(load_state)
+    if [[ -n "$state" ]] && [[ -z "${REINSTALL:-}" ]] && [[ -z "${FULL_REMOVE:-}" ]] && [[ -z "${SKIP_INSTALL:-}" ]] && [[ -z "${CHECK_UPDATE:-}" ]]; then
+        return 0
+    fi
+    return 1
+}
+
+# Show main menu for existing installation
+show_main_menu() {
+    step "Shizu уже установлен. Что сделать?"
+    echo "  1) Переустановить (без сброса сессии Telegram)"
+    echo "  2) Полностью удалить всё"
+    echo "  3) Пропустить установку и просто запустить"
+    echo "  4) Проверить обновления с GitHub (текущая ветка)"
+    echo "  5) Выход"
+    while true; do
+        read -rp "Выбор [1-5]: " choice
+        case "$choice" in
+            1) REINSTALL=1; return 0 ;;
+            2) FULL_REMOVE=1; return 0 ;;
+            3) SKIP_INSTALL=1; return 0 ;;
+            4) CHECK_UPDATE=1; return 0 ;;
+            5) exit 0 ;;
+            *) echo "Неверный выбор" ;;
+        esac
+    done
+}
+
+# Stage 1: Choose user
+stage_user() {
+    step "Этап 1/5: Выбор пользователя для запуска сервиса"
+    echo "  1) root (не рекомендуется)"
+    echo "  2) Текущий пользователь ($USER)"
+    echo "  3) Создать нового системного пользователя"
+    while true; do
+        read -rp "Выбор [1-3]: " choice
+        case "$choice" in
+            1) SERVICE_USER_MODE="root"; SERVICE_USER="root"; break ;;
+            2) SERVICE_USER_MODE="current"; SERVICE_USER="$USER"; break ;;
+            3) SERVICE_USER_MODE="create"
+               read -rp "Имя нового пользователя: " newuser
+               [[ -n "$newuser" ]] || { echo "Имя не может быть пустым"; continue; }
+               SERVICE_USER="$newuser"
+               break ;;
+            *) echo "Неверный выбор" ;;
+        esac
+    done
+    save_state "{\"service_user_mode\":\"$SERVICE_USER_MODE\",\"service_user\":\"$SERVICE_USER\"}"
+    ok "Пользователь: $SERVICE_USER (режим: $SERVICE_USER_MODE)"
+}
+
+# Stage 2: Choose Python version
+stage_python() {
+    step "Этап 2/5: Выбор версии Python"
+    # Detect available versions
+    local available=()
+    for v in 3.14 3.13 3.12 3.11; do
+        if command -v "python$v" >/dev/null 2>&1; then
+            available+=("$v")
+        fi
+    done
+    
+    echo "  1) Авто — самая новая доступная (по умолчанию: ${available[0]:-3.14})"
+    echo "  2) Python 3.14"
+    echo "  3) Python 3.13"
+    echo "  4) Python 3.12"
+    echo "  5) Python 3.11"
+    while true; do
+        read -rp "Выбор [1-5]: " choice
+        case "$choice" in
+            1) PYTHON_VER="auto"; break ;;
+            2) PYTHON_VER="3.14"; break ;;
+            3) PYTHON_VER="3.13"; break ;;
+            4) PYTHON_VER="3.12"; break ;;
+            5) PYTHON_VER="3.11"; break ;;
+            *) echo "Неверный выбор" ;;
+        esac
+    done
+    save_state "{\"python_version\":\"$PYTHON_VER\"}"
+    ok "Python: $PYTHON_VER"
+}
+
+# Stage 3: Web or terminal
+stage_interface() {
+    step "Этап 3/5: Способ регистрации в Telegram"
+    echo "  1) Веб-интерфейс (через браузер)"
+    echo "  2) Терминал (QR-код / код / 2FA)"
+    while true; do
+        read -rp "Выбор [1-2]: " choice
+        case "$choice" in
+            1) INTERFACE_MODE="web"; break ;;
+            2) INTERFACE_MODE="terminal"; break ;;
+            *) echo "Неверный выбор" ;;
+        esac
+    done
+    save_state "{\"interface_mode\":\"$INTERFACE_MODE\"}"
+    ok "Режим: $INTERFACE_MODE"
+}
+
+# Stage 4: Create systemd service
+stage_systemd() {
+    step "Этап 4/5: Настройка системного сервиса"
+    
+    local sudo_available=0
+    if [[ $EUID -eq 0 ]]; then
+        sudo_available=1
+    elif command -v sudo >/dev/null 2>&1 && sudo -n -v 2>/dev/null; then
+        sudo_available=1
+    fi
+    
+    if [[ "$SERVICE_USER_MODE" == "root" && $EUID -ne 0 ]]; then
+        warn "Запуск от root требует sudo"
+    fi
+    
+    if [[ $sudo_available -eq 0 && "$SERVICE_USER_MODE" != "current" ]]; then
+        echo "  sudo недоступен. Варианты:"
+        echo "    1) User-level systemd сервис (без sudo, запускается при логине пользователя)"
+        echo "    2) Только ручной запуск (bash start.sh)"
+        echo "    3) Пропустить systemd"
+        while true; do
+            read -rp "Выбор [1-3]: " choice
+            case "$choice" in
+                1) SYSTEMD_MODE="user"; break ;;
+                2) SYSTEMD_MODE="manual"; break ;;
+                3) SYSTEMD_MODE="skip"; break ;;
+                *) echo "Неверный выбор" ;;
+            esac
+        done
     else
-        die 'curl or wget is required to download uv.'
+        echo "  1) Системный systemd сервис (требует sudo)"
+        echo "  2) User-level systemd сервис (без sudo)"
+        echo "  3) Только ручной запуск"
+        while true; do
+            read -rp "Выбор [1-3]: " choice
+            case "$choice" in
+                1) SYSTEMD_MODE="system"; break ;;
+                2) SYSTEMD_MODE="user"; break ;;
+                3) SYSTEMD_MODE="manual"; break ;;
+                *) echo "Неверный выбор" ;;
+            esac
+        done
     fi
-    UV_UNMANAGED_INSTALL="$SHIZU_ROOT/.installer/bin" sh .installer/uv-install.sh
-    SHIZU_UV="$SHIZU_ROOT/.installer/bin/uv"
-fi
+    save_state "{\"systemd_mode\":\"$SYSTEMD_MODE\"}"
+    ok "Systemd: $SYSTEMD_MODE"
+}
 
-# Keep managed interpreters and cache local to the project
-export UV_PYTHON_INSTALL_DIR="$SHIZU_ROOT/.installer/python"
-export UV_CACHE_DIR="$SHIZU_ROOT/.installer/cache"
+# Stage 5: Confirmation
+stage_confirm() {
+    step "Этап 5/5: Подтверждение"
+    echo "  Пользователь: $SERVICE_USER ($SERVICE_USER_MODE)"
+    echo "  Python: $PYTHON_VER"
+    echo "  Интерфейс: $INTERFACE_MODE"
+    echo "  Systemd: $SYSTEMD_MODE"
+    echo ""
+    read -rp "Всё верно? Начать установку? [y/N]: " confirm
+    [[ "${confirm,,}" == "y" || "${confirm,,}" == "yes" ]] || die "Отменено пользователем"
+    save_state "{\"confirmed\":True}"
+}
 
-# If root and no --root flag, warn and suggest creating a user
-if [[ $IS_ROOT -eq 1 && $ALLOW_ROOT -eq 0 ]]; then
-    printf '%sWarning:%s Running as root without --root flag.\n' "$AMBER" "$RESET" >&2
-    printf '  The Shizu service will NOT run as root by default.\n' >&2
-    printf '  Installer will create a dedicated system user.\n\n' >&2
-
-    if [[ -z "$SERVICE_USER" && -z "${CREATE_USER:-}" ]]; then
-        # Auto-create 'shizu' user if interactive
-        if [[ -t 0 && -z "${ARGS[*]}" ]]; then
-            printf 'Create system user for Shizu service? [Y/n]: ' >&2
-            read -r ans || ans="y"
-            if [[ "${ans,,}" != "n" ]]; then
-                CREATE_USER="shizu"
-            fi
+# Run Python installer with collected options
+run_python_installer() {
+    step "Запуск Python установщика..."
+    
+    # Bootstrap uv
+    if command -v uv >/dev/null 2>&1; then
+        SHIZU_UV="$(command -v uv)"
+    elif [[ -x "$SHIZU_ROOT/.installer/bin/uv" ]]; then
+        SHIZU_UV="$SHIZU_ROOT/.installer/bin/uv"
+    else
+        step 'Downloading uv'
+        mkdir -p .installer/bin
+        if command -v curl >/dev/null 2>&1; then
+            curl --fail --location --silent --show-error https://astral.sh/uv/install.sh -o .installer/uv-install.sh
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q https://astral.sh/uv/install.sh -O .installer/uv-install.sh
         else
-            CREATE_USER="shizu"
+            die 'curl or wget is required to download uv.'
         fi
-        ARGS+=("--create-user" "$CREATE_USER")
+        UV_UNMANAGED_INSTALL="$SHIZU_ROOT/.installer/bin" sh .installer/uv-install.sh
+        SHIZU_UV="$SHIZU_ROOT/.installer/bin/uv"
     fi
-fi
+    
+    export UV_PYTHON_INSTALL_DIR="$SHIZU_ROOT/.installer/python"
+    export UV_CACHE_DIR="$SHIZU_ROOT/.installer/cache"
+    
+    local args=()
+    [[ "$PYTHON_VER" != "auto" ]] && args+=(--python "$PYTHON_VER") || args+=(--auto)
+    [[ "$INTERFACE_MODE" == "terminal" ]] && args+=(--no-web)
+    [[ "$SYSTEMD_MODE" == "skip" ]] && args+=(--skip-systemd)
+    [[ "$SYSTEMD_MODE" == "user" ]] && args+=(--skip-systemd)  # handled separately
+    
+    # Pass service user info
+    case "$SERVICE_USER_MODE" in
+        root) args+=(--root) ;;
+        create) args+=(--create-user "$SERVICE_USER") ;;
+        current) args+=(--service-user "$SERVICE_USER") ;;
+    esac
+    
+    exec python3 "$SHIZU_ROOT/scripts/shizu_installer.py" "${args[@]}"
+}
 
-# If not root, run as current user
-if [[ $IS_ROOT -eq 0 ]]; then
-    # Don't override user choice
-    if [[ -z "$SERVICE_USER" && -z "${CREATE_USER:-}" ]]; then
-        CURRENT_USER=$(whoami)
-        if [[ -t 0 && -z "${ARGS[*]}" ]]; then
-            printf 'Run Shizu service as current user "%s"? [Y/n]: ' "$CURRENT_USER" >&2
-            read -r ans || ans="y"
-            if [[ "${ans,,}" != "n" ]]; then
-                ARGS+=("--service-user" "$CURRENT_USER")
-            else
-                printf 'Enter system username to create for Shizu service: ' >&2
-                read -r new_user || new_user="shizu"
-                ARGS+=("--create-user" "$new_user")
-            fi
+# Handle reinstall / update / remove
+handle_existing() {
+    show_main_menu
+    
+    if [[ -n "${REINSTALL:-}" ]]; then
+        step "Переустановка (сессия Telegram сохраняется)..."
+        # Remove venv and installer, keep data
+        rm -rf "$SHIZU_ROOT/.venv" "$SHIZU_ROOT/.installer" "$SHIZU_ROOT/.venv.next"
+        for old in "$SHIZU_ROOT"/.venv.old.*; do
+            [[ -d "$old" ]] && rm -rf "$old"
+        done
+        # Remove systemd unit if exists
+        if [[ -f /etc/systemd/system/shizu.service ]]; then
+            sudo rm -f /etc/systemd/system/shizu.service 2>/dev/null || rm -f /etc/systemd/system/shizu.service 2>/dev/null
+            sudo systemctl daemon-reload 2>/dev/null || systemctl daemon-reload 2>/dev/null
         fi
+        # Remove user service
+        rm -f "$HOME/.config/systemd/user/shizu.service"
+        systemctl --user daemon-reload 2>/dev/null || true
+        
+        # Reset state but keep telegram session info
+        python3 -c "
+import json, os
+state_file = '$STATE_FILE'
+if os.path.exists(state_file):
+    with open(state_file) as f:
+        data = json.load(f)
+    # Keep telegram session related data
+    keep = {k: data[k] for k in ('telegram_session', 'api_id', 'api_hash') if k in data}
+    with open(state_file, 'w') as f:
+        json.dump(keep, f, indent=2)
+"
+        exec "$0"  # Restart installer
+        return
     fi
-fi
+    
+    if [[ -n "${FULL_REMOVE:-}" ]]; then
+        step "Полное удаление..."
+        read -rp "Точно удалить ВСЁ включая сессию Telegram? [yes/NO]: " confirm
+        [[ "$confirm" == "yes" ]] || die "Отменено"
+        rm -rf "$SHIZU_ROOT/.venv" "$SHIZU_ROOT/.installer" "$SHIZU_ROOT/.venv.next" "$SHIZU_ROOT/config.ini" "$SHIZU_ROOT/data" "$SHIZU_ROOT/sessions" "$SHIZU_ROOT/backup.key"
+        for old in "$SHIZU_ROOT"/.venv.old.*; do [[ -d "$old" ]] && rm -rf "$old"; done
+        sudo rm -f /etc/systemd/system/shizu.service 2>/dev/null
+        sudo systemctl daemon-reload 2>/dev/null || true
+        rm -f "$HOME/.config/systemd/user/shizu.service"
+        systemctl --user daemon-reload 2>/dev/null || true
+        rm -rf "$SHIZU_ROOT/.installer"
+        ok "Всё удалено"
+        exit 0
+    fi
+    
+    if [[ -n "${SKIP_INSTALL:-}" ]]; then
+        step "Запуск Shizu..."
+        exec bash start.sh
+    fi
+    
+    if [[ -n "${CHECK_UPDATE:-}" ]]; then
+        step "Проверка обновлений с GitHub..."
+        cd "$SHIZU_ROOT"
+        local current_branch
+        current_branch=$(git branch --show-current 2>/dev/null || echo "main")
+        info "Текущая ветка: $current_branch"
+        git fetch origin "$current_branch" 2>/dev/null || die "Не удалось получить обновления"
+        local behind
+        behind=$(git rev-list --count HEAD..origin/"$current_branch" 2>/dev/null || echo "0")
+        if [[ "$behind" -gt 0 ]]; then
+            info "Доступно обновлений: $behind коммитов"
+            read -rp "Обновиться? [y/N]: " confirm
+            [[ "${confirm,,}" == "y" ]] || exit 0
+            git pull origin "$current_branch" || die "Ошибка обновления"
+            ok "Обновлено. Перезапуск установщика..."
+            exec "$0"
+        else
+            ok "Уже актуально"
+        fi
+        exit 0
+    fi
+}
 
-# Run Python installer with all arguments
-exec python3 "$SHIZU_ROOT/scripts/shizu_installer.py" "${ARGS[@]}"
+# Main
+main() {
+    if check_existing; then
+        handle_existing
+    fi
+    
+    # Fresh installation
+    stage_user
+    stage_python
+    stage_interface
+    stage_systemd
+    stage_confirm
+    run_python_installer
+}
+
+main "$@"
