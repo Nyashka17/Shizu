@@ -242,9 +242,52 @@ def ensure_venv(ver: str, uv: str, rebuild: bool, dry: bool) -> str:
 
 def install_deps(venv_py: str, dry: bool) -> None:
     run([venv_py, "-m", "pip", "install", "--upgrade", "pip"], dry=dry)
-    run([venv_py, "-m", "pip", "install", "-e", str(ROOT)], dry=dry)
-    run([venv_py, "-m", "pip", "check"], dry=dry)
-    log("Dependencies installed and validated")
+    
+    # Pre-clone and install kurigram with retries to avoid transient network failures
+    kurigram_dir = CACHE_DIR / "kurigram"
+    if not dry:
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                if kurigram_dir.exists():
+                    shutil.rmtree(kurigram_dir, ignore_errors=True)
+                log(f"Cloning kurigram (attempt {attempt}/{max_retries})...")
+                subprocess.run(
+                    ["git", "clone", "--filter=blob:none", "--quiet", "https://github.com/kurigram-org/kurigram", str(kurigram_dir)],
+                    check=True,
+                    env=os.environ,
+                    text=True,
+                )
+                log("kurigram cloned successfully")
+                break
+            except subprocess.CalledProcessError as e:
+                if attempt == max_retries:
+                    die(f"Failed to clone kurigram after {max_retries} attempts: {e}")
+                log(f"Clone failed, retrying in 5s... ({attempt}/{max_retries})")
+                time.sleep(5)
+        
+        # Install kurigram from local clone
+        run([venv_py, "-m", "pip", "install", "-e", str(kurigram_dir)], dry=dry)
+    
+    # Temporarily modify pyproject.toml to use local kurigram
+    pyproject_path = ROOT / "pyproject.toml"
+    original_content = pyproject_path.read_text()
+    modified_content = original_content.replace(
+        'kurigram @ git+https://github.com/kurigram-org/kurigram',
+        f'kurigram @ file://{kurigram_dir}'
+    )
+    if not dry:
+        pyproject_path.write_text(modified_content)
+    
+    try:
+        # Install main project
+        run([venv_py, "-m", "pip", "install", "-e", str(ROOT)], dry=dry)
+        run([venv_py, "-m", "pip", "check"], dry=dry)
+        log("Dependencies installed and validated")
+    finally:
+        # Restore original pyproject.toml
+        if not dry:
+            pyproject_path.write_text(original_content)
 
 
 UNIT_DESCRIPTION = "Description=Shizu Telegram userbot"
