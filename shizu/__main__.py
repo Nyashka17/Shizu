@@ -21,8 +21,8 @@ import sys
 
 from shizu.security import PrivateFiles
 
-if os.geteuid() == 0:
-    raise RuntimeError("Shizu must run as an ordinary user, not root")
+if os.geteuid() == 0 and os.environ.get("SHIZU_ALLOW_ROOT") != "1":
+    raise RuntimeError("Shizu must run as an ordinary user, not root. Set SHIZU_ALLOW_ROOT=1 to override.")
 
 PrivateFiles.restrict_process()
 

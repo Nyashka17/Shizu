@@ -28,8 +28,8 @@ def ask(question):
             return True
 
 
-def run(*command):
-    subprocess.run(command, cwd=ROOT, check=True)
+def run(*command, env=None):
+    subprocess.run(command, cwd=ROOT, check=True, env=env or os.environ)
 
 
 def unit_quote(value):
@@ -273,7 +273,11 @@ def main():
     setup_cmd = [str(PYTHON), "-u", "-m", "shizu", "--setup-only"]
     if args.no_web:
         setup_cmd.insert(3, "--no-web")
-    run(*setup_cmd)
+    # Allow root if requested
+    env = os.environ.copy()
+    if args.root or (args.service_user and args.service_user == "root"):
+        env["SHIZU_ALLOW_ROOT"] = "1"
+    run(*setup_cmd, env=env)
     if use_service:
         if use_user_service:
             # User-level systemd service (no sudo needed)

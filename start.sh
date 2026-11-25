@@ -31,4 +31,9 @@ if [[ "${1:-}" == --no-web ]]; then
     shift
 fi
 
+# Allow running as root if needed
+if [[ $EUID -eq 0 ]]; then
+    export SHIZU_ALLOW_ROOT=1
+fi
+
 exec .venv/bin/python -u -m shizu "${ARGS[@]}" "$@"
