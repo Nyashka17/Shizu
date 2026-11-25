@@ -62,15 +62,16 @@ esac
 load_state() {
     if [[ -f "$STATE_FILE" ]]; then
         python3 -c "
-import json, sys
+import json, sys, os
+state_file = sys.argv[1]
 try:
-    with open('$STATE_FILE') as f:
+    with open(state_file) as f:
         data = json.load(f)
     for k, v in data.items():
         print(f'{k}={v}')
 except:
     pass
-"
+" "$STATE_FILE"
     fi
 }
 
@@ -104,18 +105,20 @@ check_existing() {
 show_main_menu() {
     step "Shizu уже установлен. Что сделать?"
     echo "  1) Переустановить (без сброса сессии Telegram)"
-    echo "  2) Полностью удалить всё"
-    echo "  3) Пропустить установку и просто запустить"
-    echo "  4) Проверить обновления с GitHub (текущая ветка)"
-    echo "  5) Выход"
+    echo "  2) Удалить всё (но сохранить сессию Telegram)"
+    echo "  3) Удалить всё (удаляет всё кроме исходного кода)"
+    echo "  4) Пропустить установку и просто запустить"
+    echo "  5) Проверить обновления с GitHub (текущая ветка)"
+    echo "  6) Выход"
     while true; do
-        read -rp "Выбор [1-5]: " choice
+        read -rp "Выбор [1-6]: " choice
         case "$choice" in
             1) REINSTALL=1; return 0 ;;
-            2) FULL_REMOVE=1; return 0 ;;
-            3) SKIP_INSTALL=1; return 0 ;;
-            4) CHECK_UPDATE=1; return 0 ;;
-            5) exit 0 ;;
+            2) FULL_REMOVE_KEEP_SESSION=1; return 0 ;;
+            3) FULL_REMOVE_ALL=1; return 0 ;;
+            4) SKIP_INSTALL=1; return 0 ;;
+            5) CHECK_UPDATE=1; return 0 ;;
+            6) exit 0 ;;
             *) echo "Неверный выбор" ;;
         esac
     done
@@ -330,9 +333,9 @@ if os.path.exists(state_file):
         return
     fi
     
-    if [[ -n "${FULL_REMOVE:-}" ]]; then
-        step "Полное удаление..."
-        read -rp "Точно удалить ВСЁ включая сессию Telegram? [yes/NO]: " confirm
+    if [[ -n "${FULL_REMOVE_KEEP_SESSION:-}" ]]; then
+        step "Удаление всего (сессия Telegram сохраняется)..."
+        read -rp "Точно удалить ВСЁ кроме сессии Telegram? [yes/NO]: " confirm
         [[ "$confirm" == "yes" ]] || die "Отменено"
         rm -rf "$SHIZU_ROOT/.venv" "$SHIZU_ROOT/.installer" "$SHIZU_ROOT/.venv.next" "$SHIZU_ROOT/config.ini" "$SHIZU_ROOT/data" "$SHIZU_ROOT/sessions" "$SHIZU_ROOT/backup.key"
         for old in "$SHIZU_ROOT"/.venv.old.*; do [[ -d "$old" ]] && rm -rf "$old"; done
@@ -341,7 +344,22 @@ if os.path.exists(state_file):
         rm -f "$HOME/.config/systemd/user/shizu.service"
         systemctl --user daemon-reload 2>/dev/null || true
         rm -rf "$SHIZU_ROOT/.installer"
-        ok "Всё удалено"
+        ok "Всё удалено, сессия Telegram сохранена"
+        exit 0
+    fi
+    
+    if [[ -n "${FULL_REMOVE_ALL:-}" ]]; then
+        step "Полное удаление (остаётся только исходный код)..."
+        read -rp "Точно удалить ВСЁ кроме исходного кода? [yes/NO]: " confirm
+        [[ "$confirm" == "yes" ]] || die "Отменено"
+        rm -rf "$SHIZU_ROOT/.venv" "$SHIZU_ROOT/.installer" "$SHIZU_ROOT/.venv.next" "$SHIZU_ROOT/config.ini" "$SHIZU_ROOT/data" "$SHIZU_ROOT/sessions" "$SHIZU_ROOT/backup.key" "$SHIZU_ROOT/shizu.session" "$SHIZU_ROOT/telethon_sessions.key" "$SHIZU_ROOT/telethon_sessions.sqlite3"
+        for old in "$SHIZU_ROOT"/.venv.old.*; do [[ -d "$old" ]] && rm -rf "$old"; done
+        sudo rm -f /etc/systemd/system/shizu.service 2>/dev/null
+        sudo systemctl daemon-reload 2>/dev/null || true
+        rm -f "$HOME/.config/systemd/user/shizu.service"
+        systemctl --user daemon-reload 2>/dev/null || true
+        rm -rf "$SHIZU_ROOT/.installer"
+        ok "Всё удалено, остался только исходный код"
         exit 0
     fi
     
