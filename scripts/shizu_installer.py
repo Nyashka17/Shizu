@@ -328,7 +328,7 @@ def install_systemd(user: str, group: str, dry: bool, privileged: list[str]) -> 
     log(f"systemd unit file {unit_name} written (enabled/started by stage 2 login)")
 
 
-def ensure_user(name: str | None, create: str | None, yes: bool, non_interactive: bool, dry: bool, privileged: list[str]) -> tuple[str, str]:
+def ensure_user(name: str | None, create: str | None, yes: bool, non_interactive: bool, dry: bool, privileged: list[str], allow_root: bool = False) -> tuple[str, str]:
     """Return (user, group) to run the service as."""
     if name:
         try:
@@ -349,10 +349,10 @@ def ensure_user(name: str | None, create: str | None, yes: bool, non_interactive
             run([*privileged, "useradd", "--system", "--create-home", "--shell", "/usr/sbin/nologin", create], check=False)
             rec = pwd.getpwnam(create)
         return rec.pw_name, rec.pw_name
-    # default: current user, but never root for the service
+    # default: current user, but never root for the service unless --root
     me = pwd.getpwuid(os.geteuid())
-    if me.pw_name == "root":
-        die("Refusing to run the Shizu service as root. Use --service-user or --create-user.")
+    if me.pw_name == "root" and not allow_root:
+        die("Refusing to run the Shizu service as root. Use --root, --service-user or --create-user.")
     return me.pw_name, me.pw_name
 
 
@@ -365,7 +365,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--start", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--no-web", action="store_true", help="terminal setup instead of web setup")
     p.add_argument("--recreate", action="store_true", help="remove old venv/installer and install fresh")
-    p.add_argument("--root", action="store_true", help="allow privileged install actions")
+    p.add_argument("--root", action="store_true", help="allow running Shizu service as root (not recommended)")
     p.add_argument("--service-user", help="run service as existing user")
     p.add_argument("--create-user", help="create a new system user for the service")
     p.add_argument("--yes", "-y", action="store_true", help="answer yes to all prompts")
@@ -436,6 +436,14 @@ def main() -> int:
         stage2_args = [str(INSTALL_PY)]
         if args.no_web:
             stage2_args.append("--no-web")
+        if args.root:
+            stage2_args.append("--root")
+        if args.service_user:
+            stage2_args.extend(["--service-user", args.service_user])
+        if args.create_user:
+            stage2_args.extend(["--create-user", args.create_user])
+        if args.skip_systemd:
+            stage2_args.append("--skip-systemd")
         os.execv(venv_py, [venv_py] + stage2_args)
 
     log("Stage 1 complete (--no-start). Dependencies installed. Run: bash start.sh")

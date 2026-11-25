@@ -60,7 +60,7 @@ def own_unit():
 
 def service_text(username):
     if username == "root":
-        raise ValueError("The hardened userbot service must run as an ordinary user")
+        raise ValueError("The hardened userbot service must run as an ordinary user. Use --root to override.")
     if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\$?", username):
         raise ValueError(f"Unsupported user name for systemd: {username!r}")
     readonly = " ".join(
@@ -149,6 +149,18 @@ def main():
     parser.add_argument(
         "--no-web", action="store_true", help="Terminal setup instead of web setup"
     )
+    parser.add_argument(
+        "--root", action="store_true", help="allow running Shizu service as root (not recommended)"
+    )
+    parser.add_argument(
+        "--service-user", help="run service as existing system user"
+    )
+    parser.add_argument(
+        "--create-user", help="create a new system user for the service"
+    )
+    parser.add_argument(
+        "--skip-systemd", action="store_true", help="skip systemd service installation"
+    )
     args = parser.parse_args()
     os.chdir(ROOT)
     os.umask(0o077)
@@ -163,6 +175,7 @@ def main():
         sys.platform.startswith("linux")
         and Path("/run/systemd/system").is_dir()
         and shutil.which("systemctl")
+        and not args.skip_systemd
     )
     if (
         systemd
@@ -177,14 +190,23 @@ def main():
     )
     privileged = [] if os.geteuid() == 0 else ["sudo"]
     if use_service:
-        if pwd.getpwuid(os.getuid()).pw_name == "root":
-            raise RuntimeError("Install Shizu as an ordinary user; a root service is refused")
-        if privileged and not shutil.which("sudo"):
-            raise RuntimeError("sudo was not found. Choose manual start or set up sudo")
-        if UNIT_PATH.exists() and not own_unit():
-            raise RuntimeError(
-                "shizu.service already exists and is not overwritten. Use it, or start manually with bash start.sh"
-            )
+        # Determine service username
+        if args.service_user:
+            username = args.service_user
+            try:
+                pwd.getpwnam(username)
+            except KeyError:
+                raise RuntimeError(f"--service-user {username} does not exist")
+        elif args.create_user:
+            username = args.create_user
+            if privileged:
+                run(*privileged, "useradd", "--system", "--create-home", "--shell", "/usr/sbin/nologin", username)
+        elif args.root:
+            username = "root"
+        else:
+            username = pwd.getpwuid(os.getuid()).pw_name
+            if username == "root":
+                raise RuntimeError("Install Shizu as an ordinary user; a root service is refused. Use --root, --service-user, or --create-user.")
         if privileged:
             run("sudo", "-v")
     elif sys.platform.startswith("linux") and not systemd:
@@ -200,7 +222,6 @@ def main():
         setup_cmd.insert(3, "--no-web")
     run(*setup_cmd)
     if use_service:
-        username = pwd.getpwuid(os.getuid()).pw_name
         with tempfile.TemporaryDirectory(prefix="shizu-service-") as folder:
             unit = Path(folder) / SERVICE
             unit.write_text(service_text(username), encoding="utf-8")
