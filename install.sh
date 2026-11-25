@@ -50,6 +50,26 @@ fi
 STATE_FILE="$SHIZU_ROOT/.installer/state.json"
 mkdir -p "$SHIZU_ROOT/.installer"
 
+# Generate random service suffix
+generate_service_suffix() {
+    cat /dev/urandom | tr -dc 'a-z0-9' | fold -w 5 | head -n 1
+}
+
+# Get or create service name
+get_service_name() {
+    local state
+    state=$(load_state)
+    if echo "$state" | grep -q "service_name="; then
+        echo "$state" | grep "service_name=" | cut -d= -f2
+    else
+        local suffix
+        suffix=$(generate_service_suffix)
+        local service_name="shizu_${suffix}.service"
+        save_state "{\"service_name\":\"$service_name\"}"
+        echo "$service_name"
+    fi
+}
+
 # Handle command-line options
 case "${1:-}" in
     --reinstall) REINSTALL=1; shift ;;
@@ -103,22 +123,26 @@ check_existing() {
 
 # Show main menu for existing installation
 show_main_menu() {
+    local service_name
+    service_name=$(get_service_name)
     step "Shizu уже установлен. Что сделать?"
     echo "  1) Переустановить (без сброса сессии Telegram)"
     echo "  2) Удалить всё (но сохранить сессию Telegram)"
     echo "  3) Удалить всё (удаляет всё кроме исходного кода)"
     echo "  4) Пропустить установку и просто запустить"
     echo "  5) Проверить обновления с GitHub (текущая ветка)"
-    echo "  6) Выход"
+    echo "  6) Показать имя системного сервиса ($service_name)"
+    echo "  7) Выход"
     while true; do
-        read -rp "Выбор [1-6]: " choice
+        read -rp "Выбор [1-7]: " choice
         case "$choice" in
             1) REINSTALL=1; return 0 ;;
             2) FULL_REMOVE_KEEP_SESSION=1; return 0 ;;
             3) FULL_REMOVE_ALL=1; return 0 ;;
             4) SKIP_INSTALL=1; return 0 ;;
             5) CHECK_UPDATE=1; return 0 ;;
-            6) exit 0 ;;
+            6) echo "Сервис: $service_name"; echo "Команды: systemctl status $service_name, journalctl -u $service_name -f"; continue ;;
+            7) exit 0 ;;
             *) echo "Неверный выбор" ;;
         esac
     done
@@ -259,6 +283,11 @@ stage_confirm() {
 run_python_installer() {
     step "Запуск Python установщика..."
     
+    # Get service name (generate if new, load if existing)
+    local service_name
+    service_name=$(get_service_name)
+    info "Systemd service name: $service_name"
+    
     # Bootstrap uv
     if command -v uv >/dev/null 2>&1; then
         SHIZU_UV="$(command -v uv)"
@@ -287,6 +316,9 @@ run_python_installer() {
     [[ "$SYSTEMD_MODE" == "skip" ]] && args+=(--skip-systemd)
     [[ "$SYSTEMD_MODE" == "user" ]] && args+=(--skip-systemd)  # handled separately
     
+    # Pass service name
+    args+=(--service-name "$service_name")
+    
     # Pass service user info
     case "$SERVICE_USER_MODE" in
         root) args+=(--root) ;;
@@ -299,22 +331,30 @@ run_python_installer() {
 
 # Handle reinstall / update / remove
 handle_existing() {
+    local service_name
+    service_name=$(get_service_name)
     show_main_menu
     
     if [[ -n "${REINSTALL:-}" ]]; then
         step "Переустановка (сессия Telegram сохраняется)..."
+        # Stop and disable the service before removal
+        sudo systemctl stop "$service_name" 2>/dev/null || true
+        sudo systemctl disable "$service_name" 2>/dev/null || true
+        systemctl --user stop "$service_name" 2>/dev/null || true
+        systemctl --user disable "$service_name" 2>/dev/null || true
+        
         # Remove venv and installer, keep data
         rm -rf "$SHIZU_ROOT/.venv" "$SHIZU_ROOT/.installer" "$SHIZU_ROOT/.venv.next"
         for old in "$SHIZU_ROOT"/.venv.old.*; do
             [[ -d "$old" ]] && rm -rf "$old"
         done
         # Remove systemd unit if exists
-        if [[ -f /etc/systemd/system/shizu.service ]]; then
-            sudo rm -f /etc/systemd/system/shizu.service 2>/dev/null || rm -f /etc/systemd/system/shizu.service 2>/dev/null
+        if [[ -f "/etc/systemd/system/$service_name" ]]; then
+            sudo rm -f "/etc/systemd/system/$service_name" 2>/dev/null || rm -f "/etc/systemd/system/$service_name" 2>/dev/null
             sudo systemctl daemon-reload 2>/dev/null || systemctl daemon-reload 2>/dev/null
         fi
         # Remove user service
-        rm -f "$HOME/.config/systemd/user/shizu.service"
+        rm -f "$HOME/.config/systemd/user/$service_name"
         systemctl --user daemon-reload 2>/dev/null || true
         
         # Reset state but keep telegram session info
@@ -337,11 +377,18 @@ if os.path.exists(state_file):
         step "Удаление всего (сессия Telegram сохраняется)..."
         read -rp "Точно удалить ВСЁ кроме сессии Telegram? [yes/NO]: " confirm
         [[ "$confirm" == "yes" ]] || die "Отменено"
+        
+        # Stop and disable the service
+        sudo systemctl stop "$service_name" 2>/dev/null || true
+        sudo systemctl disable "$service_name" 2>/dev/null || true
+        systemctl --user stop "$service_name" 2>/dev/null || true
+        systemctl --user disable "$service_name" 2>/dev/null || true
+        
         rm -rf "$SHIZU_ROOT/.venv" "$SHIZU_ROOT/.installer" "$SHIZU_ROOT/.venv.next" "$SHIZU_ROOT/config.ini" "$SHIZU_ROOT/data" "$SHIZU_ROOT/sessions" "$SHIZU_ROOT/backup.key"
         for old in "$SHIZU_ROOT"/.venv.old.*; do [[ -d "$old" ]] && rm -rf "$old"; done
-        sudo rm -f /etc/systemd/system/shizu.service 2>/dev/null
+        sudo rm -f "/etc/systemd/system/$service_name" 2>/dev/null
         sudo systemctl daemon-reload 2>/dev/null || true
-        rm -f "$HOME/.config/systemd/user/shizu.service"
+        rm -f "$HOME/.config/systemd/user/$service_name"
         systemctl --user daemon-reload 2>/dev/null || true
         rm -rf "$SHIZU_ROOT/.installer"
         ok "Всё удалено, сессия Telegram сохранена"
@@ -352,11 +399,18 @@ if os.path.exists(state_file):
         step "Полное удаление (остаётся только исходный код)..."
         read -rp "Точно удалить ВСЁ кроме исходного кода? [yes/NO]: " confirm
         [[ "$confirm" == "yes" ]] || die "Отменено"
+        
+        # Stop and disable the service
+        sudo systemctl stop "$service_name" 2>/dev/null || true
+        sudo systemctl disable "$service_name" 2>/dev/null || true
+        systemctl --user stop "$service_name" 2>/dev/null || true
+        systemctl --user disable "$service_name" 2>/dev/null || true
+        
         rm -rf "$SHIZU_ROOT/.venv" "$SHIZU_ROOT/.installer" "$SHIZU_ROOT/.venv.next" "$SHIZU_ROOT/config.ini" "$SHIZU_ROOT/data" "$SHIZU_ROOT/sessions" "$SHIZU_ROOT/backup.key" "$SHIZU_ROOT/shizu.session" "$SHIZU_ROOT/telethon_sessions.key" "$SHIZU_ROOT/telethon_sessions.sqlite3"
         for old in "$SHIZU_ROOT"/.venv.old.*; do [[ -d "$old" ]] && rm -rf "$old"; done
-        sudo rm -f /etc/systemd/system/shizu.service 2>/dev/null
+        sudo rm -f "/etc/systemd/system/$service_name" 2>/dev/null
         sudo systemctl daemon-reload 2>/dev/null || true
-        rm -f "$HOME/.config/systemd/user/shizu.service"
+        rm -f "$HOME/.config/systemd/user/$service_name"
         systemctl --user daemon-reload 2>/dev/null || true
         rm -rf "$SHIZU_ROOT/.installer"
         ok "Всё удалено, остался только исходный код"

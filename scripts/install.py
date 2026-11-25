@@ -5,8 +5,10 @@ import configparser
 import getpass
 import os
 import pwd
+import random
 import re
 import shutil
+import string
 import subprocess
 import sys
 import tempfile
@@ -14,9 +16,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PYTHON = ROOT / ".venv/bin/python"
-SERVICE = "shizu.service"
-UNIT_PATH = Path("/etc/systemd/system") / SERVICE
+DEFAULT_SERVICE = "shizu.service"
+UNIT_DIR = Path("/etc/systemd/system")
 DESCRIPTION = "Description=Shizu Telegram userbot"
+
+
+def generate_service_suffix() -> str:
+    """Generate a 5-character random suffix for service name."""
+    return "".join(random.choices(string.ascii_lowercase + string.digits, k=5))
 
 
 def ask(question):
@@ -50,9 +57,10 @@ def unit_value(value):
     return value.replace("%", "%%")
 
 
-def own_unit():
+def own_unit(service_name: str):
+    unit_path = UNIT_DIR / service_name
     try:
-        text = UNIT_PATH.read_text(encoding="utf-8")
+        text = unit_path.read_text(encoding="utf-8")
     except OSError:
         return False
     return DESCRIPTION in text and str(ROOT) in text
@@ -177,10 +185,25 @@ def main():
     parser.add_argument(
         "--systemd-mode", choices=["system", "user", "manual", "skip"], help="systemd mode"
     )
+    parser.add_argument(
+        "--service-name", help="Custom systemd service name (default: shizu_<5random>.service)"
+    )
     args = parser.parse_args()
     os.chdir(ROOT)
     os.umask(0o077)
-    print("\nShizu is installed. Start it manually with: bash start.sh", flush=True)
+    
+    # Determine service name
+    if args.service_name:
+        service_name = args.service_name
+        if not service_name.endswith(".service"):
+            service_name += ".service"
+    else:
+        # Generate random suffix for new installations
+        service_name = f"shizu_{generate_service_suffix()}.service"
+    
+    UNIT_PATH = UNIT_DIR / service_name
+    print(f"\nShizu is installed. Service: {service_name}", flush=True)
+    print("Start it manually with: bash start.sh", flush=True)
     if args.no_start:
         return
     if not sys.stdin.isatty():
@@ -197,11 +220,11 @@ def main():
     )
     if (
         systemd
-        and subprocess.run(["systemctl", "is-active", "--quiet", SERVICE]).returncode
+        and subprocess.run(["systemctl", "is-active", "--quiet", service_name]).returncode
         == 0
     ):
         raise RuntimeError(
-            "The Shizu service is already running. Stop it first: sudo systemctl stop shizu"
+            f"The Shizu service ({service_name}) is already running. Stop it first: sudo systemctl stop {service_name}"
         )
     
     # Check sudo availability
@@ -264,6 +287,37 @@ def main():
             run(*privileged, "sudo", "-v")
     elif sys.platform.startswith("linux") and not systemd:
         print("systemd was not found. Start Shizu manually with bash start.sh.")
+    
+    # Create systemd service BEFORE Telegram login so it's ready even if login is interrupted
+    if use_service:
+        if use_user_service:
+            # User-level systemd service (no sudo needed)
+            user_unit_dir = Path.home() / ".config" / "systemd" / "user"
+            user_unit_dir.mkdir(parents=True, exist_ok=True)
+            user_unit_path = user_unit_dir / service_name
+            unit_content = service_text(username)
+            # For user service, we need to adjust paths
+            unit_content = unit_content.replace("WantedBy=multi-user.target", "WantedBy=default.target")
+            user_unit_path.write_text(unit_content, encoding="utf-8")
+            run("systemctl", "--user", "daemon-reload")
+            run("systemctl", "--user", "enable", "--now", service_name)
+            print(
+                f"\nShizu systemd user service created and enabled: {service_name}\n  Logs:    journalctl --user -u {service_name} -f\n  Restart: systemctl --user restart {service_name}\n  Stop:    systemctl --user stop {service_name}\n  Enable linger: loginctl enable-linger $USER",
+                flush=True,
+            )
+        else:
+            # System-level service (requires sudo)
+            with tempfile.TemporaryDirectory(prefix="shizu-service-") as folder:
+                unit = Path(folder) / service_name
+                unit.write_text(service_text(username), encoding="utf-8")
+                run(*privileged, "install", "-m", "644", str(unit), str(UNIT_PATH))
+            run(*privileged, "systemctl", "daemon-reload")
+            run(*privileged, "systemctl", "enable", "--now", service_name)
+            print(
+                f"\nShizu systemd service created and enabled: {service_name}\n  Logs:    journalctl -u {service_name} -f\n  Restart: sudo systemctl restart {service_name}\n  Stop:    sudo systemctl stop {service_name}",
+                flush=True,
+            )
+    
     if args.no_web:
         account_config()
     print(
@@ -278,48 +332,33 @@ def main():
     if args.root or (args.service_user and args.service_user == "root"):
         env["SHIZU_ALLOW_ROOT"] = "1"
     run(*setup_cmd, env=env)
+    
+    # Verify service is running after login
     if use_service:
         if use_user_service:
-            # User-level systemd service (no sudo needed)
-            user_unit_dir = Path.home() / ".config" / "systemd" / "user"
-            user_unit_dir.mkdir(parents=True, exist_ok=True)
-            user_unit_path = user_unit_dir / SERVICE
-            unit_content = service_text(username)
-            # For user service, we need to adjust paths
-            unit_content = unit_content.replace("WantedBy=multi-user.target", "WantedBy=default.target")
-            user_unit_path.write_text(unit_content, encoding="utf-8")
-            run("systemctl", "--user", "daemon-reload")
-            run("systemctl", "--user", "enable", "--now", SERVICE)
             if (
-                subprocess.run(["systemctl", "--user", "is-active", "--quiet", SERVICE]).returncode
+                subprocess.run(["systemctl", "--user", "is-active", "--quiet", service_name]).returncode
                 != 0
             ):
-                subprocess.run(["systemctl", "--user", "--no-pager", "status", SERVICE])
+                subprocess.run(["systemctl", "--user", "--no-pager", "status", service_name])
                 raise RuntimeError(
-                    "The Shizu user service did not start. See the log: journalctl --user -u shizu -e"
+                    f"The Shizu user service did not start. See the log: journalctl --user -u {service_name} -e"
                 )
             print(
-                "\nShizu runs as a user service and starts on login.\n  Logs:    journalctl --user -u shizu -f\n  Restart: systemctl --user restart shizu\n  Stop:    systemctl --user stop shizu\n  Enable linger: loginctl enable-linger $USER\nOpen your bot and send /panel to control Shizu from Telegram.\n",
+                f"\nShizu runs as a user service and starts on login.\nOpen your bot and send /panel to control Shizu from Telegram.\n",
                 flush=True,
             )
         else:
-            # System-level service (requires sudo)
-            with tempfile.TemporaryDirectory(prefix="shizu-service-") as folder:
-                unit = Path(folder) / SERVICE
-                unit.write_text(service_text(username), encoding="utf-8")
-                run(*privileged, "install", "-m", "644", str(unit), str(UNIT_PATH))
-            run(*privileged, "systemctl", "daemon-reload")
-            run(*privileged, "systemctl", "enable", "--now", SERVICE)
             if (
-                subprocess.run(["systemctl", "is-active", "--quiet", SERVICE]).returncode
+                subprocess.run(["systemctl", "is-active", "--quiet", service_name]).returncode
                 != 0
             ):
-                subprocess.run(["systemctl", "--no-pager", "status", SERVICE])
+                subprocess.run(["systemctl", "--no-pager", "status", service_name])
                 raise RuntimeError(
-                    "The Shizu service did not start. See the log: journalctl -u shizu -e"
+                    f"The Shizu service did not start. See the log: journalctl -u {service_name} -e"
                 )
             print(
-                "\nShizu runs as a service and starts on boot.\n  Logs:    journalctl -u shizu -f\n  Restart: sudo systemctl restart shizu\n  Stop:    sudo systemctl stop shizu\nOpen your bot and send /panel to control Shizu from Telegram.\n",
+                f"\nShizu runs as a service and starts on boot.\nOpen your bot and send /panel to control Shizu from Telegram.\n",
                 flush=True,
             )
     else:

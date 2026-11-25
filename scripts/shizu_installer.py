@@ -417,6 +417,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--systemd-mode", choices=["system", "user", "manual", "skip"], help="systemd mode")
     p.add_argument("--service-user-mode", choices=["root", "current", "create"], help="service user mode")
     p.add_argument("--interface-mode", choices=["web", "terminal"], help="interface mode")
+    p.add_argument("--service-name", help="custom systemd service name (default: shizu_<5random>.service)")
     return p.parse_args()
 
 
@@ -444,13 +445,19 @@ def main() -> int:
                         p.unlink(missing_ok=True)
             for old in ROOT.glob(".venv.old.*"):
                 shutil.rmtree(old, ignore_errors=True)
-            unit_path = Path("/etc/systemd/system/shizu.service")
-            if unit_path.exists():
+            # Remove any shizu systemd units (old and new naming)
+            systemd_dir = Path("/etc/systemd/system")
+            for unit in systemd_dir.glob("shizu*.service"):
                 if os.geteuid() == 0:
-                    unit_path.unlink(missing_ok=True)
+                    unit.unlink(missing_ok=True)
                 elif shutil.which("sudo"):
-                    run(["sudo", "rm", "-f", str(unit_path)], check=False)
-                log("Old systemd unit removed.")
+                    run(["sudo", "rm", "-f", str(unit)], check=False)
+            # Also check user systemd
+            user_systemd = Path.home() / ".config" / "systemd" / "user"
+            if user_systemd.exists():
+                for unit in user_systemd.glob("shizu*.service"):
+                    unit.unlink(missing_ok=True)
+            log("Old systemd unit(s) removed.")
             log("Old installation removed.")
         else:
             log("(dry-run) would remove .venv, .installer, state.json, systemd unit and old venvs")
@@ -490,6 +497,8 @@ def main() -> int:
             stage2_args.append("--skip-systemd")
         if args.systemd_mode == "user":
             stage2_args.extend(["--systemd-mode", "user"])
+        if args.service_name:
+            stage2_args.extend(["--service-name", args.service_name])
         os.execv(venv_py, [venv_py] + stage2_args)
 
     log("Stage 1 complete (--no-start). Dependencies installed. Run: bash start.sh")
