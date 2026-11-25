@@ -1287,8 +1287,11 @@ class Events(Item):
                         and query.from_user.id != self._me
                         and (
                             query.from_user.id
-                            not in form["always_allow"]
-                            + self._db.get("shizu.me", "owners", [] + [self._me])
+                            not in (
+                                form["always_allow"]
+                                + self._db.get("shizu.me", "owners", [])
+                                + [self._me]
+                            )
                         )
                     ):
                         await query.answer(
@@ -1340,7 +1343,7 @@ class Events(Item):
                 self._custom_map[query.data].get("force_me", None)
                 and query.from_user.id != self._me
                 and query.from_user.id
-                not in self._db.get("shizu.me", "owners", []) + [self._me]
+                not in (self._db.get("shizu.me", "owners", []) + [self._me])
             ):
                 await query.answer(
                     self._tr(
