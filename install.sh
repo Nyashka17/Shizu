@@ -326,7 +326,7 @@ if os.path.exists(state_file):
     with open(state_file, 'w') as f:
         json.dump(keep, f, indent=2)
 "
-        exec "$0"  # Restart installer
+        exec bash "$SHIZU_ROOT/install.sh"  # Restart installer
         return
     fi
     
